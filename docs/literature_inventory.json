@@ -1,0 +1,594 @@
+{
+  "source_root": "/Users/chl/文献库",
+  "count": 145,
+  "categories": {
+    "World_Model_and_Dynamics": 63,
+    "Perception_and_State_Representation": 10,
+    "Agent_and_Task_Planning": 29,
+    "Robot_Learning_and_Simulation": 14,
+    "survey": 5,
+    "Control_and_Reliability": 24
+  },
+  "files": [
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/3D_Diffusion_Policy_Generalizable_Visuomotor_Policy_Learning_via_Simple_3D_Representations.pdf",
+      "bytes": 14132846
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/A_framework_for_tool_cognition_in_robots_without_prior_tool_learning_or_observation.pdf",
+      "bytes": 2402354
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/A_robot_operating_system_framework_for_using_large_language_models_in_embodied_AI.pdf",
+      "bytes": 3018392
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/CLIPort_What_and_Where_Pathways_for_Robotic_Manipulation.pdf",
+      "bytes": 3860858
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Code_as_Policies_Language_Model_Programs_for_Embodied_Control.pdf",
+      "bytes": 3200561
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Deep_Reinforcement_Learning_based_Large_scale_Robot_Exploration.pdf",
+      "bytes": 7260262
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Diffusion_Policy_Visuomotor_Policy_Learning_via_Action_Diffusion.pdf",
+      "bytes": 6192199
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Do_As_I_Can_Not_As_I_Say_Grounding_Language_in_Robotic_Affordances.pdf",
+      "bytes": 12745682
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Embodied_large_language_models_enable_robots_to_complete_complex_tasks_in_unpredictable_environments.pdf",
+      "bytes": 1853750
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/HDPlanner_Advancing_Autonomous_Deployments_in_Unknown_Environments_through_Hierarchical_Decision_Networks.pdf",
+      "bytes": 9654681
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Hybrid_hierarchical_learning_for_solving_complex_sequential_tasks_using_the_robotic_manipulation_network_ROMAN.pdf",
+      "bytes": 4223764
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Inner_Monologue_Embodied_Reasoning_through_Planning_with_Language_Models.pdf",
+      "bytes": 7460839
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Language_Models_as_Zero_Shot_Planners_Extracting_Actionable_Knowledge_for_Embodied_Agents.pdf",
+      "bytes": 2189588
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Learning_Fine_Grained_Bimanual_Manipulation_with_Low_Cost_Hardware.pdf",
+      "bytes": 5781160
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/MTIL_Encoding_Full_History_With_Mamba_for_Temporal_Imitation_Learning.pdf",
+      "bytes": 1598630
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Navigating_to_Objects_in_the_Real_World.pdf",
+      "bytes": 7241569
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Octo_An_Open_Source_Generalist_Robot_Policy.pdf",
+      "bytes": 3411632
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/OpenVLA_An_Open_Source_Vision_Language_Action_Model.pdf",
+      "bytes": 13036087
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/PaLM_E_An_Embodied_Multimodal_Language_Model.pdf",
+      "bytes": 10162433
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Perceiver_Actor_A_Multi_Task_Transformer_for_Robotic_Manipulation.pdf",
+      "bytes": 3287621
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/Pi0_A_Vision_Language_Action_Flow_Model_for_General_Robot_Control.pdf",
+      "bytes": 12114244
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/ProgPrompt_Generating_Situated_Robot_Task_Plans_using_Large_Language_Models.pdf",
+      "bytes": 20896192
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/RDT_1B_A_Diffusion_Foundation_Model_for_Bimanual_Manipulation.pdf",
+      "bytes": 9585193
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/RT_1_Robotics_Transformer_for_Real_World_Control_at_Scale.pdf",
+      "bytes": 13330974
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/RT_2_Vision_Language_Action_Models_Transfer_Web_Knowledge_to_Robotic_Control.pdf",
+      "bytes": 15015049
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/SAILOR_perceptual_anchoring_for_robotic_cognitive_architectures.pdf",
+      "bytes": 3525511
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/SayPlan_Grounding_Large_Language_Models_using_3D_Scene_Graphs_for_Scalable_Robot_Task_Planning.pdf",
+      "bytes": 15007428
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/VIMA_Robot_Manipulation_with_Multimodal_Prompts.pdf",
+      "bytes": 10036950
+    },
+    {
+      "path": "/Users/chl/文献库/Agent_and_Task_Planning/VoxPoser_Composable_3D_Value_Maps_for_Robotic_Manipulation_with_Language_Models.pdf",
+      "bytes": 9265576
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/A_Natural_Lottery_Ticket_Winner_Reinforcement_Learning_with_Ordinary_Neural_Circuits.pdf",
+      "bytes": 2329798
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Active_Learning_of_Discrete_Time_Dynamics_for_Uncertainty_Aware_Model_Predictive_Control.pdf",
+      "bytes": 9329648
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Constrained_Policy_Optimization.pdf",
+      "bytes": 944800
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/DiffTune_MPC_Closed_Loop_Learning_for_Model_Predictive_Control.pdf",
+      "bytes": 635300
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Differentiable_MPC_for_End_to_End_Planning_and_Control.pdf",
+      "bytes": 448680
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Dropout_as_a_Bayesian_Approximation_Representing_Model_Uncertainty_in_Deep_Learning.pdf",
+      "bytes": 1026051
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Getting_robots_back_on_track_by_reconstituting_control_in_unexpected_situations_with_online_learning.pdf",
+      "bytes": 2586485
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Information_Theoretic_MPC_for_Model_Based_Reinforcement_Learning.pdf",
+      "bytes": 4150876
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Information_Theoretic_Model_Predictive_Control_Theory_and_Applications_to_Autonomous_Driving.pdf",
+      "bytes": 4908478
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Learning_Contact_Dynamics_using_Physically_Structured_Neural_Networks.pdf",
+      "bytes": 260483
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Learning_vision_based_agile_flight_via_differentiable_physics.pdf",
+      "bytes": 28434166
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Neural_Hybrid_Automata_Learning_Dynamics_with_Multiple_Modes_and_Stochastic_Transitions.pdf",
+      "bytes": 2125586
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Neural_Network_Dynamics_for_Model_Based_Deep_Reinforcement_Learning_with_Model_Free_Fine_Tuning.pdf",
+      "bytes": 2522482
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/On_Calibration_of_Modern_Neural_Networks.pdf",
+      "bytes": 828420
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Policy_Search_for_Model_Predictive_Control_With_Application_to_Agile_Drone_Flight.pdf",
+      "bytes": 7956526
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Real_Time_Neural_MPC_Deep_Learning_Model_Predictive_Control_for_Quadrotors_and_Agile_Robotic_Platforms.pdf",
+      "bytes": 2365616
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Representation_Free_Model_Predictive_Control_for_Dynamic_Motions_in_Quadrupeds.pdf",
+      "bytes": 6259519
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Residual_Reinforcement_Learning_for_Robot_Control.pdf",
+      "bytes": 2959124
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Safe_Exploration_for_Optimization_with_Gaussian_Processes.pdf",
+      "bytes": 369748
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Safe_Model_based_Reinforcement_Learning_with_Stability_Guarantees.pdf",
+      "bytes": 993022
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Sample_Efficient_Learning_Based_Dynamic_Environment_Navigation_With_Transferring_Experience_From_Optimization_Based_Planner.pdf",
+      "bytes": 1991124
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Scenario_based_motion_planning_with_bounded_probability_of_collision.pdf",
+      "bytes": 2177370
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Simple_and_Scalable_Predictive_Uncertainty_Estimation_using_Deep_Ensembles.pdf",
+      "bytes": 1185123
+    },
+    {
+      "path": "/Users/chl/文献库/Control_and_Reliability/Topology_Driven_Parallel_Trajectory_Optimization_in_Dynamic_Environments.pdf",
+      "bytes": 17122372
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/BiTraP_Bi_Directional_Pedestrian_Trajectory_Prediction_With_Multi_Modal_Goal_Estimation.pdf",
+      "bytes": 2836659
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/CAD2SLAM_Adaptive_Projection_Between_CAD_Blueprints_and_SLAM_Maps.pdf",
+      "bytes": 1749594
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/Controlling_diverse_robots_by_inferring_Jacobian_fields_with_deep_networks.pdf",
+      "bytes": 32915604
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/Does_Computer_Vision_Matter_for_Action.pdf",
+      "bytes": 7465176
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/FAST_LIVO2_Fast_Direct_LiDARInertialVisual_Odometry.pdf",
+      "bytes": 39653122
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/Learning_Sequential_Descriptors_for_Sequence_Based_Visual_Place_Recognition.pdf",
+      "bytes": 1557040
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/Learning_contact_representations_in_real_world_clutter_for_universal_robotic_grasping.pdf",
+      "bytes": 6846425
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/NeuralFeels_with_Neural_Fields_Visuotactile_Perception_for_In_Hand_Manipulation.pdf",
+      "bytes": 21062413
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/PointSLOT_Real_Time_Simultaneous_Localization_and_Object_Tracking_for_Dynamic_Environment.pdf",
+      "bytes": 1204178
+    },
+    {
+      "path": "/Users/chl/文献库/Perception_and_State_Representation/Swarm_SLAM_Sparse_Decentralized_Collaborative_Simultaneous_Localization_and_Mapping_Framework_for_Multi_Robot_Systems.pdf",
+      "bytes": 1458601
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/A_model_free_method_to_learn_multiple_skills_in_parallel_on_modular_robots.pdf",
+      "bytes": 3270366
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/CALVIN_A_Benchmark_for_Language_Conditioned_Policy_Learning_for_Long_Horizon_Robot_Manipulation_Tasks.pdf",
+      "bytes": 2092247
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/DROID_A_Large_Scale_In_The_Wild_Robot_Manipulation_Dataset.pdf",
+      "bytes": 4160650
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Domain_Randomization_for_Transferring_Deep_Neural_Networks_from_Simulation_to_the_Real_World.pdf",
+      "bytes": 4066798
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Elastica_A_Compliant_Mechanics_Environment_for_Soft_Robotic_Control.pdf",
+      "bytes": 3504156
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Identifying_important_sensory_feedback_for_learning_locomotion_skills.pdf",
+      "bytes": 11073568
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Lifelike_agility_and_play_in_quadrupedal_robots_using_reinforcement_learning_and_generative_pre_trained_models.pdf",
+      "bytes": 17776255
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/ManiSkill2_A_Unified_Benchmark_for_Generalizable_Manipulation_Skills.pdf",
+      "bytes": 7635048
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/ManiSkill_Generalizable_Manipulation_Skill_Benchmark_with_Large_Scale_Demonstrations.pdf",
+      "bytes": 12468763
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Meta_World_A_Benchmark_and_Evaluation_for_Multi_Task_and_Meta_Reinforcement_Learning.pdf",
+      "bytes": 3087780
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/MuJoCo_A_Physics_Engine_for_Model_Based_Control.pdf",
+      "bytes": 447792
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Open_X_Embodiment_Robotic_Learning_Datasets_and_RT_X_Models.pdf",
+      "bytes": 4011306
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/RLBench_The_Robot_Learning_Benchmark_Learning_Environment.pdf",
+      "bytes": 3732227
+    },
+    {
+      "path": "/Users/chl/文献库/Robot_Learning_and_Simulation/Sim_to_Real_Transfer_of_Robotic_Control_with_Dynamics_Randomization.pdf",
+      "bytes": 2845918
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/3D_VLA_A_3D_Vision_Language_Action_Generative_World_Model.pdf",
+      "bytes": 6302885
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Adversarial_Inverse_Reinforcement_Learning_With_Self_Attention_Dynamics_Model.pdf",
+      "bytes": 2668900
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/COMBO_Conservative_Offline_Model_Based_Policy_Optimization.pdf",
+      "bytes": 1047736
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/CarDreamer_Open_Source_Learning_Platform_for_World_Model_Based_Autonomous_Driving.pdf",
+      "bytes": 2871356
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Closed_Loop_Visuomotor_Control_with_Generative_Expectation_for_Robotic_Manipulation.pdf",
+      "bytes": 4848288
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Context_aware_Dynamics_Model_for_Generalization_in_Model_Based_Reinforcement_Learning.pdf",
+      "bytes": 1273863
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Continuous_improvement_of_self_driving_cars_using_dynamic_confidence_aware_reinforcement_learning.pdf",
+      "bytes": 3205075
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Contrastive_Learning_of_Structured_World_Models.pdf",
+      "bytes": 2382685
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Ctrl_World_A_Controllable_Generative_World_Model_for_Robot_Manipulation.pdf",
+      "bytes": 4514937
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/DINO_WM_World_Models_on_Pre_trained_Visual_Features_Enable_Zero_shot_Planning.pdf",
+      "bytes": 6880790
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/DayDreamer_World_Models_for_Physical_Robot_Learning.pdf",
+      "bytes": 2988954
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Deep_Reinforcement_Learning_in_a_Handful_of_Trials_using_Probabilistic_Dynamics_Models.pdf",
+      "bytes": 1730423
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Deep_Visual_Foresight_for_Planning_Robot_Motion.pdf",
+      "bytes": 4135921
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Discovery_of_the_reward_function_for_embodied_reinforcement_learning_agents.pdf",
+      "bytes": 2058150
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Do_Embodied_Agents_Dream_of_Pixelated_Sheep_Embodied_Decision_Making_using_Language_Guided_World_Modelling.pdf",
+      "bytes": 770725
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Dream_to_Control_Learning_Behaviors_by_Latent_Imagination.pdf",
+      "bytes": 1999946
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Exploring_the_limits_of_hierarchical_world_models_in_reinforcement_learning.pdf",
+      "bytes": 4574692
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/FLARE_Robot_Learning_with_Implicit_World_Modeling.pdf",
+      "bytes": 10467300
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/FLIP_Flow_Centric_Generative_Planning_as_General_Purpose_Manipulation_World_Model.pdf",
+      "bytes": 18197623
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Goal_Aware_Prediction_Learning_to_Model_What_Matters.pdf",
+      "bytes": 3618318
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Hierarchical_Foresight_Self_Supervised_Learning_of_Long_Horizon_Tasks_via_Visual_Subgoal_Generation.pdf",
+      "bytes": 1382158
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Hierarchical_generative_modelling_for_autonomous_robots.pdf",
+      "bytes": 3179467
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Improving_Generative_Imagination_in_Object_Centric_World_Models.pdf",
+      "bytes": 1735463
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Interaction_Networks_for_Learning_about_Objects_Relations_and_Physics.pdf",
+      "bytes": 1911277
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Iso_Dream_Isolating_Noncontrollable_Visual_Dynamics_in_World_Models.pdf",
+      "bytes": 4752789
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/LaDi_WM_A_Latent_Diffusion_Based_World_Model_for_Predictive_Manipulation.pdf",
+      "bytes": 4549481
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Language_Models_Meet_World_Models_Embodied_Experiences_Enhance_Language_Models.pdf",
+      "bytes": 2683099
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Learning_Latent_Dynamics_for_Planning_from_Pixels.pdf",
+      "bytes": 834694
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Learning_Mesh_Based_Simulation_with_Graph_Networks.pdf",
+      "bytes": 2324251
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Learning_Universal_Policies_via_Text_Guided_Video_Generation.pdf",
+      "bytes": 6065059
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Learning_View_invariant_World_Models_for_Visual_Robotic_Manipulation.pdf",
+      "bytes": 1939449
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Learning_to_Simulate_Complex_Physics_with_Graph_Networks.pdf",
+      "bytes": 5779214
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/MOPO_Model_based_Offline_Policy_Optimization.pdf",
+      "bytes": 607742
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/MOReL_Model_Based_Offline_Reinforcement_Learning.pdf",
+      "bytes": 1527445
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Masked_World_Models_for_Visual_Control.pdf",
+      "bytes": 915662
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Mastering_Atari_Go_Chess_and_Shogi_by_Planning_with_a_Learned_Model.pdf",
+      "bytes": 2701361
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Mastering_Atari_with_Discrete_World_Models.pdf",
+      "bytes": 5261247
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Mastering_Diverse_Control_Tasks_through_World_Models.pdf",
+      "bytes": 23580846
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/MoDem_Accelerating_Visual_Model_Based_Reinforcement_Learning_with_Demonstrations.pdf",
+      "bytes": 3095046
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Model_Based_Reinforcement_Learning_for_Atari.pdf",
+      "bytes": 1949715
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Model_based_reinforcement_learning_for_ultrasound_driven_autonomous_microrobots.pdf",
+      "bytes": 11962438
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Multi_View_Masked_World_Models_for_Visual_Robotic_Manipulation.pdf",
+      "bytes": 2941266
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Neural_Relational_Inference_for_Interacting_Systems.pdf",
+      "bytes": 2064181
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Object_Centric_Learning_with_Slot_Attention.pdf",
+      "bytes": 2223527
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/One_Shot_Real_to_Sim_via_End_to_End_Differentiable_Simulation_and_Rendering.pdf",
+      "bytes": 2816122
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/PIVOT_R_Primitive_Driven_Waypoint_Aware_World_Model_for_Robotic_Manipulation.pdf",
+      "bytes": 4534673
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Planning_to_Explore_via_Self_Supervised_World_Models.pdf",
+      "bytes": 2533635
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Propagation_Networks_for_Model_Based_Control_Under_Partial_Observation.pdf",
+      "bytes": 1530259
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/RAMBO_RL_Robust_Adversarial_Model_Based_Offline_Reinforcement_Learning.pdf",
+      "bytes": 290896
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Recurrent_World_Models_Facilitate_Policy_Evolution.pdf",
+      "bytes": 1432305
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Robustness_via_Retrying_Closed_Loop_Robotic_Manipulation_with_Self_Supervised_Learning.pdf",
+      "bytes": 5628287
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Self_Improving_Robot_Policy_with_Compositional_World_Model.pdf",
+      "bytes": 6053189
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Self_Supervised_Visual_Planning_with_Temporal_Skip_Connections.pdf",
+      "bytes": 4090035
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/TD_MPC2_Scalable_Robust_World_Models_for_Continuous_Control.pdf",
+      "bytes": 7858004
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Teaching_robots_to_build_simulations_of_themselves.pdf",
+      "bytes": 3446745
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Temporal_Difference_Learning_for_Model_Predictive_Control.pdf",
+      "bytes": 12584890
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Unleashing_Large_Scale_Video_Generative_Pre_training_for_Visual_Robot_Manipulation.pdf",
+      "bytes": 9438084
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Unsupervised_Learning_for_Physical_Interaction_through_Video_Prediction.pdf",
+      "bytes": 1393887
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Video_Language_Planning.pdf",
+      "bytes": 5468375
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Video_Prediction_Policy_A_Generalist_Robot_Policy_with_Predictive_Visual_Representations.pdf",
+      "bytes": 18156818
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Visual_Interaction_Networks_Learning_a_Physics_Simulator_from_Video.pdf",
+      "bytes": 5671272
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/When_to_Trust_Your_Model_Model_Based_Policy_Optimization.pdf",
+      "bytes": 2698463
+    },
+    {
+      "path": "/Users/chl/文献库/World_Model_and_Dynamics/Zero_Shot_Robotic_Manipulation_with_Pre_Trained_Image_Editing_Diffusion_Models.pdf",
+      "bytes": 17764880
+    },
+    {
+      "path": "/Users/chl/文献库/survey/2510.16732.pdf",
+      "bytes": 3501610
+    },
+    {
+      "path": "/Users/chl/文献库/survey/2605.00080.pdf",
+      "bytes": 3163855
+    },
+    {
+      "path": "/Users/chl/文献库/survey/2609.16074.pdf",
+      "bytes": 4531144
+    },
+    {
+      "path": "/Users/chl/文献库/survey/SmartBot - 2026 - Wang - World Models for Robotic Manipulation  A Survey.pdf",
+      "bytes": 3983406
+    },
+    {
+      "path": "/Users/chl/文献库/survey/s44163-026-02122-1.pdf",
+      "bytes": 3114892
+    }
+  ]
+}

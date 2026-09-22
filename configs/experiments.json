@@ -1,0 +1,22 @@
+{
+  "status": "proposed",
+  "variants": [
+    "B0",
+    "B1",
+    "B2",
+    "B3",
+    "Ours",
+    "L0"
+  ],
+  "train_seeds_proposal": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "test_episodes_per_seed_proposal": 50,
+  "primary_metric": "perturbed_task_success_rate",
+  "evaluation_mode": "frozen",
+  "threshold_selection_split": "validation"
+}

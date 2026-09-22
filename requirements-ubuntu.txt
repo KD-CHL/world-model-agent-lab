@@ -1,0 +1,2 @@
+# Design scaffold only. Pin MuJoCo/PyTorch/CUDA and optional LLM SDK after official compatibility and baseline implementation checks.
+# No training dependencies are installed by this file.

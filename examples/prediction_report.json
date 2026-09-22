@@ -1,0 +1,22 @@
+{
+  "schema_version": "0.1-design",
+  "request_id": "b0d6efb3-c47c-4ef3-97d0-c4c75b3feb47",
+  "episode_id": "example-only",
+  "step_id": 20,
+  "sim_time_s": 0.4,
+  "wall_time_utc": "2026-09-22T00:00:00Z",
+  "model_version": "untrained-example",
+  "candidate_id": "candidate-pick",
+  "skill_id": "pick",
+  "input_step": 20,
+  "valid_until_step": 21,
+  "prediction_horizon_steps": 100,
+  "outcome_mean": null,
+  "outcome_variance": null,
+  "ensemble_disagreement": null,
+  "success_score": null,
+  "score_semantics": "unavailable",
+  "calibration_version": null,
+  "controller_version": "untrained-example",
+  "status": "MODEL_UNAVAILABLE"
+}

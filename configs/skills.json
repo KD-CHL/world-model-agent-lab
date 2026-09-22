@@ -1,0 +1,25 @@
+{
+  "status": "design_only",
+  "skills": [
+    {
+      "skill_id": "reach",
+      "controller_version": null,
+      "implementation": "pending"
+    },
+    {
+      "skill_id": "push",
+      "controller_version": null,
+      "implementation": "pending"
+    },
+    {
+      "skill_id": "pick",
+      "controller_version": null,
+      "implementation": "pending"
+    },
+    {
+      "skill_id": "place",
+      "controller_version": null,
+      "implementation": "pending"
+    }
+  ]
+}

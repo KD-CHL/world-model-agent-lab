@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+data/*
+!data/README.md
+runs/*
+!runs/README.md

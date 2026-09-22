@@ -1,0 +1,14 @@
+{
+  "status": "design_only",
+  "robot": "unselected_7dof_arm",
+  "observation_profile": "state",
+  "world_model": "latent_dynamics",
+  "skill_outcome_model": "independent_bootstrap_ensemble",
+  "ensemble_size_proposal": 5,
+  "physics_dt_s": 0.002,
+  "action_repeat": 10,
+  "max_skill_retries_proposal": 2,
+  "max_task_recoveries_proposal": 4,
+  "hardware": null,
+  "software_versions": "verify_before_implementation"
+}
