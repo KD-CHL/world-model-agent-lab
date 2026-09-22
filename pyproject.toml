@@ -5,9 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "world-model-agent-lab"
 version = "0.0.1"
-description = "Design scaffold for world-model robotics and task agents"
+description = "API task agent, world-model planning and ROS 2 robot interfaces"
 requires-python = ">=3.10"
 dependencies = []
+
+[project.optional-dependencies]
+simulation = ["mujoco>=3.2,<4"]
+
+[project.scripts]
+wmal-agent = "wmal.agents.cli:run_agent"
+wmal-serve = "wmal.agents.cli:serve"
 
 [tool.setuptools.packages.find]
 where = ["src"]

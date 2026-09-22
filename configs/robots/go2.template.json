@@ -1,0 +1,7 @@
+{
+  "status": "template_requires_asset_mapping",
+  "profile": {"robot_id": "go2", "kind": "go2", "joint_limits": {}, "capabilities": ["joint_positions"]},
+  "model_path": "REPLACE_WITH_ACTUAL_MODEL.xml",
+  "actuator_map": {},
+  "locomotion_plugin": null
+}

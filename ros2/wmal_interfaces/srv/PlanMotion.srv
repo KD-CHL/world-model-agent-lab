@@ -1,0 +1,6 @@
+# Versioned profile, observation and goal payload.
+string json
+---
+bool ok
+# Versioned Plan on success; sanitized error code otherwise.
+string json

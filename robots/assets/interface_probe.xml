@@ -1,0 +1,13 @@
+<mujoco model="interface_probe">
+  <option timestep="0.002" gravity="0 0 0"/>
+  <worldbody>
+    <body name="link" pos="0 0 0.2">
+      <joint name="hinge" type="hinge" axis="0 0 1" range="-1 1" limited="true" damping="1"/>
+      <geom type="capsule" fromto="0 0 0 0.2 0 0" size="0.02" mass="1"/>
+    </body>
+  </worldbody>
+  <compiler angle="radian"/>
+  <actuator>
+    <position name="servo" joint="hinge" kp="30" ctrlrange="-1 1" ctrllimited="true"/>
+  </actuator>
+</mujoco>

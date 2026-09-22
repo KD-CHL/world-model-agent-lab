@@ -1,0 +1,9 @@
+# Versioned MotionCommand
+string json
+---
+# Versioned ExecutionResult
+string json
+---
+float64 sim_time_s
+uint64 step_id
+string status
