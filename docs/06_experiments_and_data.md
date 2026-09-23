@@ -38,6 +38,7 @@
 
 - run_manifest.json：run_id、variant、git_commit或源码哈希、配置哈希、模型/校准/控制器/检测器版本、硬件软件、全部种子、数据版本。
 - transitions：episode_id、step_id、sim_time_s、capture_time、observation、commanded_action、executed_action、hold_steps、reward、next_observation、terminated、truncated、reason、source。数组用分片NPZ，索引用JSONL；大规模后再考虑Zarr。
+- 第二数据源另记 `source_kind`、`source_dataset`、`source_episode_id`、`parent_trajectory_id`、`generator_checkpoint`、`license_record` 与 `executed_in_mujoco`；模型动作在 MuJoCo 执行后仍计为仿真交互，模型生成视频不能当作环境真值。准入与可行性见[视觉动作模型支线](12_secondary_data_feasibility.md)。
 - skill_segments.jsonl：候选、技能参数、初态/终态、执行跨度、成功/超时/censor、控制器版本、phase。
 - events.jsonl：请求/回复、结构化Agent输入输出、候选分数、预测跨度、触发原因、原始观测引用、时延和错误码。
 - evaluation_privileged.jsonl：隐藏扰动、场景真值、评测标签，单独目录且Agent接口不读取。

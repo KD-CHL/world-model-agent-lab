@@ -17,6 +17,7 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 9. [Agent、ROS 2 设计与启动指南](docs/09_agent_ros2_design.md)
 10. [世界模型规划的数据闭环与运行入口](docs/11_planning_world_model_pipeline.md)
 11. [可选视觉动作服务调用设计](docs/10_world_model_call_design.md)
+12. [视觉动作模型训练与第二数据源可行性](docs/12_secondary_data_feasibility.md)
 
 运行主线：MuJoCo 采样训练动作条件状态模型 → API Agent 解析受限关节目标 → ROS 2 规划服务滚动评估候选动作 → ROS 2 action 驱动 MuJoCo → Agent 读取新状态并重新规划。当前训练模型仅在单关节探针上验证。
 
