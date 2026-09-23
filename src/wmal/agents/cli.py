@@ -41,6 +41,12 @@ def serve():
     parser.add_argument('--config', help='Robot config, required for robot role')
     parser.add_argument('--plugin', help='Planner factory module:function, required for planner role')
     parser.add_argument('--checkpoint', help='Trained joint dynamics checkpoint for planner role')
+    parser.add_argument('--device', default='cpu', help='Inference device for neural checkpoints')
+    parser.add_argument('--planner-samples', type=int, default=128)
+    parser.add_argument('--planner-horizon', type=int, default=4)
+    parser.add_argument('--planner-iterations', type=int, default=4)
+    parser.add_argument('--action-duration-s', type=float, default=0.5)
+    parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
     if args.role == 'robot' and not args.config:
         parser.error('--config required')
@@ -56,9 +62,12 @@ def serve():
     try:
         if args.role == 'planner':
             if args.checkpoint:
-                from wmal.models.latent_dynamics import JointDynamics
+                from wmal.models.loader import load_dynamics
                 from wmal.planners.world_planner import RolloutPlanner
-                planner = RolloutPlanner(JointDynamics.load(args.checkpoint))
+                planner = RolloutPlanner(load_dynamics(args.checkpoint, device=args.device),
+                                         samples=args.planner_samples, horizon=args.planner_horizon,
+                                         iterations=args.planner_iterations,
+                                         duration_s=args.action_duration_s, seed=args.seed)
             else:
                 planner = load_factory(args.plugin)
             node = create_planner_node(planner)

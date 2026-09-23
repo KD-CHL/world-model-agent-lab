@@ -1,5 +1,17 @@
-"""Design placeholder: envs/base.
+"""Robot simulator interface consumed by data collection and evaluation."""
+from typing import Protocol
 
-See docs/03_architecture.md through docs/06_experiments_and_data.md.
-No algorithm or runtime behavior is implemented in this file.
-"""
+
+class RobotEnvironment(Protocol):
+    profile: object
+
+    def reset(self):
+        """Reset one episode and return the first observation."""
+        ...
+
+    def step(self, command):
+        """Apply one bounded command and return (observation, execution metadata)."""
+        ...
+
+    def render_rgb(self, *, camera=None, width=320, height=240):
+        ...

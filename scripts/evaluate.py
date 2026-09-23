@@ -8,25 +8,33 @@ import numpy as np
 from wmal.analysis.metrics import control_summary
 from wmal.communication.contracts import Goal, MotionCommand
 from wmal.logging.manifest import atomic_json, build_manifest, related_path, sha256_file
-from wmal.models.latent_dynamics import JointDynamics
+from wmal.models.loader import load_dynamics
 from wmal.planners.world_planner import RolloutPlanner
 from wmal.training.collector import build_backend
 from wmal.training.trainer import load_rows, prediction_error
+from wmal.envs.mujoco_env import MujocoEnvironment
 
 
 class CountedModel:
     def __init__(self, model):
         self.model, self.version, self.calls = model, model.version, 0
+        self.ensemble_size = getattr(model, 'ensemble_size', 1)
 
     def predict(self, *args):
         self.calls += 1
         return self.model.predict(*args)
 
+    def predict_member(self, *args):
+        self.calls += 1
+        if hasattr(self.model, 'predict_member'):
+            return self.model.predict_member(*args)
+        return self.model.predict(*args[1:])
+
 
 def evaluate_run(config, dataset, checkpoint, output, *, episodes=10, seed=100, experiment_id='joint_probe'):
     if episodes < 1:
         raise ValueError('episodes must be positive')
-    model = JointDynamics.load(checkpoint)
+    model = load_dynamics(checkpoint)
     train_report_path = related_path(checkpoint, 'train')
     training_seed = None
     if train_report_path.exists():
@@ -37,6 +45,7 @@ def evaluate_run(config, dataset, checkpoint, output, *, episodes=10, seed=100, 
     test_rows = [row for row in load_rows(dataset) if row['split'] == 'test']
     test_rmse = prediction_error(model, test_rows)
     backend = build_backend(config)
+    environment = MujocoEnvironment(backend, action_duration_s=0.5)
     if set(model.joints) != set(backend.profile.joint_limits):
         raise ValueError('Checkpoint does not match robot joints')
     counted = CountedModel(model)
@@ -69,7 +78,7 @@ def evaluate_run(config, dataset, checkpoint, output, *, episodes=10, seed=100, 
         for episode in range(episodes):
             targets = {joint: generator.uniform(*bounds) for joint, bounds in backend.profile.joint_limits.items()}
             for method in ('direct', 'model_planner'):
-                backend.reset()
+                environment.reset(seed=seed + episode)
                 steps = 0
                 for cycle in range(8):
                     obs = backend.observe()
@@ -92,16 +101,11 @@ def evaluate_run(config, dataset, checkpoint, output, *, episodes=10, seed=100, 
                         imagined_steps = 0
                     planning_wall_s = monotonic() - planning_started
                     predicted_next = model.predict(obs.joints, command.values, command.duration_s)
-                    physics_steps = round(command.duration_s / backend.model.opt.timestep)
                     execution_started = monotonic()
-                    backend.begin(command)
-                    applied_controls = []
-                    for _ in range(physics_steps):
-                        backend.step()
-                        applied_controls.append(backend.data.ctrl.tolist())
-                    backend.stop()
+                    after, execution = environment.step(command)
+                    physics_steps = execution['physics_steps']
+                    applied_controls = execution['applied_controls']
                     execution_wall_s = monotonic() - execution_started
-                    after = backend.observe()
                     event = {'schema_version': 1, 'source': 'mujoco_interaction',
                              'method': method, 'evaluation_episode': episode, 'evaluation_seed': seed,
                              'robot_id': backend.profile.robot_id, 'episode_id': obs.episode_id,

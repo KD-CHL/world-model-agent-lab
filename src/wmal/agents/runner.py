@@ -40,6 +40,7 @@ class AgentRunner:
                                   'observation_step': obs.step_id, 'command_id': plan.commands[0].command_id,
                                   'prediction': {'horizon_steps': plan.prediction.horizon_steps,
                                                  'predicted_state': plan.prediction.predicted_state,
+                                                 'predicted_terminal_state': plan.prediction.predicted_terminal_state,
                                                  'objective_cost': plan.prediction.objective_cost,
                                                  'uncertainty_kind': plan.prediction.uncertainty_kind,
                                                  'uncertainty': plan.prediction.uncertainty}})
@@ -54,6 +55,14 @@ class AgentRunner:
                 next_obs = self.channel.observe(timeout_s=self.timeout_s)
                 if next_obs.step_id <= obs.step_id and next_obs.episode_id == obs.episode_id:
                     raise ValueError('No fresh observation after execution')
+                residual = {joint: next_obs.joints[joint] - plan.prediction.predicted_state[joint]
+                            for joint in self.profile.joint_limits}
+                residual_rmse = (sum(value * value for value in residual.values()) /
+                                 len(residual)) ** 0.5
+                self.log('prediction_residual', {
+                    'episode_id': next_obs.episode_id, 'observation_step': next_obs.step_id,
+                    'model_version': plan.model_version, 'residual_rad': residual,
+                    'rmse_rad': residual_rmse})
                 obs = next_obs
         except (ValueError, TypeError, KeyError, TimeoutError, RuntimeError, OSError) as exc:
             # Never include HTTP response bodies, API keys or provider prompts in error logs.

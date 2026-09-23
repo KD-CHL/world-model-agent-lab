@@ -14,6 +14,7 @@ class JointDynamics:
         self.joints = tuple(joints)
         self.weights = np.asarray(weights, dtype=float)
         self.version = version
+        self.ensemble_size = len(self.weights)
         if not self.joints or len(set(self.joints)) != len(self.joints):
             raise ValueError('Invalid joint order')
         if self.weights.ndim != 3 or self.weights.shape[1:] != (2 + 2 * len(self.joints), len(self.joints)) or not np.isfinite(self.weights).all():
@@ -36,6 +37,11 @@ class JointDynamics:
     def predict(self, state, targets, duration_s):
         candidates = self.members(state, targets, duration_s)
         return {joint: float(np.mean([candidate[joint] for candidate in candidates])) for joint in self.joints}
+
+    def predict_member(self, index, state, targets, duration_s):
+        if not 0 <= index < self.ensemble_size:
+            raise IndexError('Unknown ensemble member')
+        return self.members(state, targets, duration_s)[index]
 
     @classmethod
     def fit(cls, records, joints, *, members=5, ridge=1e-3, seed=0, version='joint-dynamics-v1'):

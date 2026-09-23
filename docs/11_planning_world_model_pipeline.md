@@ -1,55 +1,65 @@
 # 世界模型规划主线：MuJoCo 采样、训练、规划与评估
 
-当前研究主线是**用动作条件动力学模型评估候选动作，滚动执行第一步，并在 MuJoCo 中收集独立实验数据**。高层 Agent 用 API 大模型解析任务，ROS 2 负责机器人状态、规划服务与执行 Action。任务尚未确定时，单关节探针仅验证链路。
+主线为动作条件模型评估候选动作序列，控制器只执行第一段，再用新观测重规划。API Agent 负责把文字任务变为经过限位检查的目标；ROS 2 传递状态、规划请求与执行动作；MuJoCo 节点独占物理步进。
 
-## 方法参照与边界
+## 开源项目方法与代码模块映射
 
-[MBRL-Lib 官方仓库](https://github.com/facebookresearch/mbrl-lib) 明确分离动力学模型、模型环境、轨迹优化与采样，附有 MuJoCo 示例；[TD-MPC2 官方仓库](https://github.com/nicklashansen/tdmpc2) 提供状态或视觉观测下的世界模型短视野规划实现。这些仓库用于确认模块边界与实验组织。当前代码是独立编写的低维关节转移基线，使用 bootstrap 岭回归预测关节位移、随机候选序列搜索和滚动规划；**不复现上述论文的神经网络、奖励/价值训练或算法性能**。
+| 参考实现 | 项目内对应功能 | 采用边界 |
+| --- | --- | --- |
+| [TD-MPC2](https://github.com/nicklashansen/tdmpc2) | 连续控制模型预测、潜在动力学预测接口；当前保留 `DynamicsModel` 接口 | 不移植其训练图、价值网络或任务嵌入；后续可实现为符合项目契约的可选后端 |
+| [MBRL-Lib](https://github.com/facebookresearch/mbrl-lib) | 模型/规划器分离；`sequence_optimizer.py` 实现有界交叉熵序列优化 | 自行实现优化器与 rollout 适配，不引用已归档项目的运行时代码 |
+| [DINO-WM](https://github.com/gaoyuezhou/dino_wm) | `visual_prediction.py` 提供图像特征编码、动作条件特征预测、目标图像规划契约 | 由明确配置的模型插件提供 `encode`/`predict_features`；语言到目标图像的映射尚未实现 |
+| [JEPA-WMs](https://github.com/facebookresearch/jepa-wms) | 同一视觉预测契约支持未来接入时空特征预测后端 | 官方实现采用 CC BY-NC 4.0；本项目不复制其源代码/检查点，单独核实权重、数据及使用条件 |
 
-此前研究的 [参考动作服务](https://github.com/unitreerobotics/unifolm-world-model-action) 返回语言条件动作序列，其 `/predict_action` 不提供任意候选动作的下一状态预测。它保留为可选策略对照，详见 [动作服务设计](10_world_model_call_design.md)，不进入本项目的世界模型规划主线，也不把其动作输出伪装成 `PredictionReport`。
+以上是功能借鉴和适配接口，不表示复现了这些论文或沿用其结果。可选的语言条件动作服务仍由 [动作服务客户端](10_world_model_call_design.md)承担；它给出动作提议，不当成候选动作状态预测。
 
-## 已实现的数据与调用链
+## 当前代码调用链
 
 ```mermaid
 flowchart LR
-  M[MuJoCo robot backend] --> C[采样器 collect]
-  C --> D[episode 分割 JSONL]
-  D --> T[动力学模型 fit]
-  T --> K[原子保存 checkpoint]
-  K --> P[ROS 规划服务 / RolloutPlanner]
-  A[API Agent 目标] --> P
-  P --> X[机器人 ExecuteMotion]
-  X --> M
-  D --> V[保留集单步预测误差]
-  K --> V
-  M --> E[独立控制回合评估]
+  U[任务文本] --> A[API Agent 受限目标解析]
+  A --> P[ROS 2 PlanMotion]
+  O[MuJoCo 状态] --> P
+  P --> C[序列优化器]
+  C --> M[状态动力学 ensemble rollout]
+  M --> R[PredictionReport]
+  R --> A
+  A --> X[ExecuteMotion 首步]
+  X --> S[MuJoCo 执行与反馈]
+  S --> D[观测残差日志]
+  D --> A
+  M --> T[训练检查点]
+  T --> P
 ```
 
-训练样本为 `(episode_id, step_id, sim_time_s, before_joints, commanded_joint_target, actual_duration_s, after_joints)`。采样器在每个 episode 重置 MuJoCo，以 episode 编号确定 train/validation/test；同一 episode 的相邻帧不跨集合。模型只使用训练集拟合；验证集报告误差；测试集留到 `evaluate.py`。模型状态是当前关节位置，动作是保持指定关节目标一段时长，输出下一时刻关节位置。`predict` 被 `RolloutPlanner` 注入使用，规划器输出带 `model_version`、观测步号和预测状态的 `Plan`。执行端再次检查 episode、step、关节限位与速度约束。
+Agent 对模型报告只消费结构化预测；它不直接控制仿真器。执行端仍验证机器人 ID、episode、step、动作模式、持续时间、关节限位与速度限制。每次命令执行后，Agent 将预测的第一步状态与新观测比较，记录每关节残差和 RMSE，再发起下一次计划请求。ensemble spread 被记录为成员差异，尚未校准前不解释为任务失败概率。
 
-当前 bootstrap 成员间差异尚未校准，**不能解释为失败概率**。本阶段只报告单步预测 RMSE、控制成功率、控制步数和最终关节误差；多步误差与不确定性校准需后续实验。机器人策略看到关节状态；仿真真值作为评估资料时须与策略输入分开。
+训练样本为 `(episode_id, step_id, sim_time_s, before_joints, commanded_joint_target, actual_duration_s, after_joints)`。所有相邻帧随 episode 进入同一数据集合。状态基线由 `scripts/train.py` 训练；可选非线性模型由 `scripts/train_neural_dynamics.py` 训练，仅用 train 拟合、validation 选择、test 最终评估。规划器对每个成员滚动模拟候选序列，只发送第一段；`PredictionReport.predicted_state` 对应执行后第一步，`predicted_terminal_state` 对应规划终点。
 
-## 探针运行
+## 采样、训练与评估命令
 
-在项目根目录、有 MuJoCo 和 NumPy 的环境中：
+在 Ubuntu 项目环境安装 MuJoCo 采样依赖；训练神经网络时另装 learning extra：
 
 ```bash
-PYTHONPATH=src python scripts/collect.py --config configs/robots/interface_probe.json --output runs/probe/transitions.jsonl --episodes 10 --steps-per-episode 8 --seed 4
-PYTHONPATH=src python scripts/train.py --dataset runs/probe/transitions.jsonl --checkpoint runs/probe/model.json --seed 4
-PYTHONPATH=src python scripts/evaluate.py --config configs/robots/interface_probe.json --dataset runs/probe/transitions.jsonl --checkpoint runs/probe/model.json --output runs/probe/evaluation.jsonl --episodes 10 --seed 20
+python -m pip install -e '.[simulation,learning]'
+python scripts/collect.py --config configs/robots/interface_probe.json --output runs/probe/transitions.jsonl --episodes 10 --steps-per-episode 8 --seed 4
+python scripts/train.py --dataset runs/probe/transitions.jsonl --checkpoint runs/probe/model.json --seed 4
+python scripts/train_neural_dynamics.py --dataset runs/probe/transitions.jsonl --checkpoint runs/probe/model.pt --members 5 --epochs 100 --seed 4
+python scripts/evaluate.py --config configs/robots/interface_probe.json --dataset runs/probe/transitions.jsonl --checkpoint runs/probe/model.pt --output runs/probe/evaluation.jsonl --episodes 10 --seed 20
 ```
 
-训练检查点接入 ROS 2 规划服务：
+把已训练模型接到 ROS 2 规划服务：
 
 ```bash
-PYTHONPATH=src python scripts/serve_ros2.py planner --checkpoint runs/probe/model.json
+python scripts/serve_ros2.py planner --checkpoint runs/probe/model.pt --device cpu
 ```
 
-机器人服务和 Agent 仍按 [ROS 2 启动文档](09_agent_ros2_design.md)运行。当前 macOS 主机没有 ROS 2，检查点加载到 ROS 服务的端到端路径需要在 Ubuntu 实测。`runs/` 是本地实验目录，不纳入 Git；正式实验需另存配置、随机种子、模型 hash、MuJoCo 版本、代码提交和原始输出。
+模型也可以用 `.json` 检查点加载线性基线。`MujocoEnvironment` 为采样和评估提供 action-duration 步进、RGB 渲染与状态快照；ROS 2 robot 节点继续独占异步物理步进。精确恢复需同时保存仿真状态、机器人资产及版本、环境 RNG 状态和外部扰动源随机状态。
 
-## 扩到实际机器人场景的接口工作
+## 视觉模型的接入契约
 
-1. 确定机械臂或 Go2/G1 的 MuJoCo 资产、关节/动作语义、控制器与任务终态；浮基机器人要有可验证的平衡/步态接口。当前单关节位置伺服模型不能迁移为整机动力学。
-2. 在 `Observation` 添加任务必要的物体、接触、末端位姿或图像信息，同时保留关节状态和统一时间戳。模型输入与执行反馈必须来自同一控制周期。
-3. 用非线性或潜在状态模型替换 `JointDynamics`，保留 `predict` 或引入显式 belief 状态；学习奖励/终端价值时重新定义目标和训练损失。不能沿用本基线名称声称实现某一论文算法。
-4. 增加固定任务规划、无模型控制、相同模型但无高层预测反馈等对照；相同 episode/训练预算/观测/技能下做多训练种子评估，并报告交互数、想象步数、延迟和失败原因。
+`GoalImagePlanner` 需要 `FeaturePredictor` 实现 `version`、`encode(rgb)` 和 `predict_features(start_features, action_sequence)`。模型必须返回 `[horizon, feature_dim]` 或 `[ensemble, horizon, feature_dim]`；规划器用动作序列预测特征与目标图像特征的距离来排序。视觉插件由配置显式加载，禁止从 LLM 输出中动态导入模块。当前 ROS `PlanMotion` 协议仍接收关节状态和关节目标，视觉规划尚未接入机器人端到端消息通路；完成具体任务、相机流与目标来源选型后再扩展消息契约。
+
+## 证据边界与下一步
+
+现阶段单关节探针只验证了状态预测/训练/仿真通信骨架；新加入的神经网络、序列优化、图像规划器与快照接口还没有运行验证。探针不能代表机械臂操作或 Go2/G1 控制能力。正式实验应选定资产和技能，测候选排序、逐步/终点预测误差、任务成功率、规划延迟和模型调用预算，并和相同训练数据及动作约束下的直接目标控制对照。

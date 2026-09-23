@@ -11,10 +11,12 @@ dependencies = []
 
 [project.optional-dependencies]
 simulation = ["mujoco>=3.2,<4", "numpy>=1.26,<3"]
+learning = ["numpy>=1.26,<3", "torch>=2.2"]
 
 [project.scripts]
 wmal-agent = "wmal.agents.cli:run_agent"
 wmal-serve = "wmal.agents.cli:serve"
+wmal-train-neural = "wmal.training.cli:train_neural_cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

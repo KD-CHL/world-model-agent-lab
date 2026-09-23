@@ -8,6 +8,7 @@ import numpy as np
 
 from wmal.communication.contracts import MotionCommand, RobotProfile
 from wmal.envs.mujoco_backend import MujocoBackend
+from wmal.envs.mujoco_env import MujocoEnvironment
 from wmal.logging.manifest import atomic_json, build_manifest, related_path
 
 
@@ -32,6 +33,7 @@ def collect(config_file, output, *, episodes=10, steps_per_episode=20, duration_
     if physics_steps < 1:
         raise ValueError('Duration shorter than physics step')
     actual_duration = physics_steps * float(backend.model.opt.timestep)
+    environment = MujocoEnvironment(backend, action_duration_s=actual_duration)
     generator = random.Random(seed)
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +56,7 @@ def collect(config_file, output, *, episodes=10, steps_per_episode=20, duration_
 
     with destination.open('w', buffering=1) as handle:
         for episode_index in range(episodes):
-            backend.reset()
+            environment.reset(seed=seed + episode_index)
             split = 'train' if episode_index % 5 < 3 else 'validation' if episode_index % 5 == 3 else 'test'
             for action_index in range(steps_per_episode):
                 before = backend.observe()
@@ -66,13 +68,8 @@ def collect(config_file, output, *, episodes=10, steps_per_episode=20, duration_
                     target[joint] = generator.uniform(max(low, value - reach), min(high, value + reach))
                 command = MotionCommand(f'collect_{episode_index}_{action_index}', backend.profile.robot_id,
                                         before.episode_id, before.step_id, 'joint_positions', target, actual_duration)
-                backend.begin(command)
-                applied_controls = []
-                for _ in range(physics_steps):
-                    backend.step()
-                    applied_controls.append(backend.data.ctrl.tolist())
-                backend.stop()
-                after = backend.observe()
+                after, execution = environment.step(command)
+                applied_controls = execution['applied_controls']
                 after_state = full_state()
                 row = {'source': 'mujoco_interaction', 'split': split, 'seed': seed,
                        'episode_index': episode_index, 'episode_id': before.episode_id,
@@ -80,7 +77,7 @@ def collect(config_file, output, *, episodes=10, steps_per_episode=20, duration_
                        'target': target, 'after': after.joints,
                        'duration_s': actual_duration, 'sim_time_s': before.sim_time_s,
                        'next_sim_time_s': after.sim_time_s, 'step_id': before.step_id,
-                       'next_step_id': after.step_id, 'physics_steps': physics_steps,
+                       'next_step_id': after.step_id, 'physics_steps': execution['physics_steps'],
                        'full_physics_state_before': before_state,
                        'full_physics_state_after': after_state,
                        'control_target': target, 'applied_controls': applied_controls,

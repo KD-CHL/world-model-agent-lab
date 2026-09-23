@@ -134,6 +134,7 @@ class PredictionReport:
     objective_cost: float
     uncertainty_kind: str = 'unavailable'
     uncertainty: dict = field(default_factory=dict)
+    predicted_terminal_state: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.model_version or type(self.observation_step) is not int or self.observation_step < 0:
@@ -141,6 +142,10 @@ class PredictionReport:
         if type(self.horizon_steps) is not int or self.horizon_steps < 1 or finite(self.objective_cost) < 0:
             raise ValueError('Invalid prediction horizon or cost')
         vector(self.predicted_state)
+        if self.predicted_terminal_state:
+            vector(self.predicted_terminal_state)
+            if set(self.predicted_terminal_state) != set(self.predicted_state):
+                raise ValueError('Terminal prediction state schema mismatch')
         if self.uncertainty_kind not in ('unavailable', 'ensemble_spread', 'aleatoric_variance', 'calibrated_interval'):
             raise ValueError('Unknown uncertainty semantics')
         for value in self.uncertainty.values():

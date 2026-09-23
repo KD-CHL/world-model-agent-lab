@@ -1,5 +1,7 @@
 """Physics backend for configured robot assets; no synthetic gait or state teleporting."""
+from pathlib import Path
 from uuid import uuid4
+import numpy as np
 from wmal.communication.contracts import Observation, finite
 from wmal.robots.interfaces import robot_interface
 
@@ -14,7 +16,8 @@ class MujocoBackend:
     def __init__(self, model_path, profile, actuator_map, locomotion=None):
         import mujoco
         self.mj = mujoco
-        self.model = mujoco.MjModel.from_xml_path(model_path)
+        self.model_path = str(Path(model_path).resolve())
+        self.model = mujoco.MjModel.from_xml_path(self.model_path)
         self.data = mujoco.MjData(self.model)
         self.profile, self.interface = profile, robot_interface(profile)
         self.locomotion = locomotion
@@ -125,4 +128,45 @@ class MujocoBackend:
         self.mj.mj_forward(self.model, self.data)
         self.episode_id, self.step_id = str(uuid4()), 0
         self.stop()
+        return self.observe()
+
+    def render_rgb(self, *, camera=None, width=320, height=240):
+        """Render a copied HWC uint8 frame; call under the physics owner's lock."""
+        if type(width) is not int or type(height) is not int or not 1 <= width <= 4096 or not 1 <= height <= 4096:
+            raise ValueError('Invalid render dimensions')
+        renderer = self.mj.Renderer(self.model, height=height, width=width)
+        try:
+            renderer.update_scene(self.data, camera=camera)
+            return renderer.render().copy()
+        finally:
+            renderer.close()
+
+    def snapshot(self):
+        """Capture integration state for deterministic replay within the same asset/version."""
+        state_spec = self.mj.mjtState.mjSTATE_INTEGRATION
+        values = np.empty(self.mj.mj_stateSize(self.model, state_spec), dtype=float)
+        self.mj.mj_getState(self.model, self.data, values, state_spec)
+        return {'schema_version': 1, 'model_path': self.model_path,
+                'episode_id': self.episode_id, 'step_id': self.step_id,
+                'state_spec': int(state_spec), 'integration_state': values.tolist(),
+                'controls': self.data.ctrl.tolist()}
+
+    def restore(self, snapshot):
+        if snapshot.get('schema_version') != 1 or snapshot.get('model_path') != self.model_path:
+            raise ValueError('Snapshot does not match simulation asset')
+        state_spec = self.mj.mjtState.mjSTATE_INTEGRATION
+        if snapshot.get('state_spec') != int(state_spec):
+            raise ValueError('Snapshot uses a different MuJoCo state specification')
+        values = np.asarray(snapshot['integration_state'], dtype=float)
+        controls = np.asarray(snapshot['controls'], dtype=float)
+        if values.size != self.mj.mj_stateSize(self.model, state_spec) or controls.size != self.model.nu:
+            raise ValueError('Snapshot state dimension mismatch')
+        if not np.isfinite(values).all() or not np.isfinite(controls).all():
+            raise ValueError('Snapshot contains nonfinite values')
+        self.mj.mj_setState(self.model, self.data, values, state_spec)
+        self.data.ctrl[:] = controls
+        self.mj.mj_forward(self.model, self.data)
+        self.episode_id, self.step_id = snapshot['episode_id'], int(snapshot['step_id'])
+        self.mode = 'joint_positions'
+        self.targets = self.observe().joints
         return self.observe()

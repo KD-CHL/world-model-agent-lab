@@ -156,9 +156,6 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
                     self.active = False
                     try:
                         backend.stop()
-                        # Publish a strictly newer state after the command is held.
-                        # The planner can then bind its next request to fresh physics.
-                        backend.step()
                     except Exception:
                         self.fault = True
                     self.busy = False

@@ -1,8 +1,9 @@
-# models
+# 模型模块
 
-规划模型可加载本项目生成的单关节探针检查点；正式机器人模型尚未训练和验证。
+- `latent_dynamics.py`：低维状态、动作目标条件下的 bootstrap 岭回归集成。
+- `neural_dynamics.py`：可选 PyTorch MLP 成员集成，训练入口位于 `training/neural_trainer.py`。
+- `loader.py`：按 `.json`、`.pt`/`.pth` 加载项目格式的状态模型。
+- `visual_prediction.py`：目标图像规划使用的图像特征预测协议和候选序列优化适配器。
+- `action_service.py`：语言条件动作序列服务客户端；动作提议与未来状态预测保持不同语义。
 
-- `latent_dynamics.py`：独立编写的动作条件关节位移回归基线、bootstrap 成员和检查点读写；不是论文算法的复现。
-- `action_service.py`：可选视觉动作服务客户端，返回动作序列，不向规划器冒充状态预测。
-- `skill_outcome.py`：早期场景方案留下的占位模块；当前 Agent 路径不调用。
-- `calibration.py`：预留 calibration 模块；接口与验收见 docs 文档。
+神经和视觉功能属于新接入代码，尚未运行验证。视觉模型必须由显式配置的本地插件提供推理能力。
