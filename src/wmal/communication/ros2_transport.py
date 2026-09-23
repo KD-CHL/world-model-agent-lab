@@ -26,6 +26,7 @@ class Ros2Channel:
         from rclpy.action import ActionClient
         from wmal_interfaces.msg import RobotState
         from wmal_interfaces.srv import PlanMotion
+        from wmal_interfaces.srv import ResetSimulation
         from wmal_interfaces.action import ExecuteMotion
         self._rclpy = rclpy
         self.profile = profile
@@ -44,8 +45,10 @@ class Ros2Channel:
         namespace = '/wmal/' + profile.robot_id
         self._sub = self.node.create_subscription(RobotState, namespace + '/state', self._state_callback, 1)
         self._planner = self.node.create_client(PlanMotion, planning_service)
+        self._reset_client = self.node.create_client(ResetSimulation, namespace + '/reset')
         self._motion = ActionClient(self.node, ExecuteMotion, namespace + '/execute_motion')
         self._request_type, self._goal_type = PlanMotion.Request, ExecuteMotion.Goal
+        self._reset_type = ResetSimulation.Request
         self._thread = Thread(target=self._executor.spin, daemon=True)
         self._thread.start()
 
@@ -56,6 +59,8 @@ class Ros2Channel:
         except (ValueError, TypeError, KeyError):
             return
         with self._condition:
+            if self._latest and observation.episode_id != self._latest.episode_id:
+                return
             if self._latest and observation.episode_id == self._latest.episode_id and observation.step_id < self._latest.step_id:
                 return
             self._latest, self._received_at = observation, monotonic()
@@ -92,6 +97,20 @@ class Ros2Channel:
         plan = decode(response.json, Plan)
         plan.validate(profile, observation)
         return plan
+
+    def reset(self, timeout_s=10):
+        if not self._reset_client.wait_for_service(timeout_sec=timeout_s):
+            raise TimeoutError('Robot reset service unavailable')
+        response = wait_future(self._reset_client.call_async(self._reset_type()), timeout_s)
+        if not response.ok:
+            raise RuntimeError('Robot reset rejected')
+        observation = decode(response.json, Observation)
+        observation.validate(self.profile)
+        self._after = None
+        with self._condition:
+            self._latest, self._received_at = observation, monotonic()
+            self._condition.notify_all()
+        return observation
 
     def execute(self, command, timeout_s=30):
         command.validate(self.profile)

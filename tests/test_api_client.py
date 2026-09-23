@@ -65,5 +65,10 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.client.propose_goal('move', self.profile, self.obs)
 
+    def test_unexpected_response_shape_is_rejected_without_execution(self):
+        self.reply = {'choices': ['malformed']}
+        with self.assertRaises(ValueError):
+            self.client.propose_goal('move', self.profile, self.obs)
+
 
 if __name__ == '__main__': unittest.main()

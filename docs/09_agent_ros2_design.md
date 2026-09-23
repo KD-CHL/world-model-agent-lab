@@ -45,6 +45,7 @@ flowchart LR
 - `state`：RobotState，JSON 负载附 schema_version；QoS reliable、depth 1。
 - `execute_motion`：ExecuteMotion action，包含目标受理、进行中反馈、终态、取消。
 - `/wmal/plan`：PlanMotion service，机器人 profile + 最新观测 + goal → plan 或结构化错误。
+- `/wmal/<robot_id>/reset`：ResetSimulation service，仅机器人空闲时重置场景，返回新的 episode_id 和初始观测。
 
 JSON 用于初期可演化的研究字段；每条入口重新校验，不依赖语言模型保证格式。命令必须带 robot_id、episode_id、expected_step、唯一 command_id、有限 duration_s。持续时间是相对时长；不跨机器传递单调时钟 deadline。过期状态由接收端按本地接收时间判定，旧 episode、旧 step 和重复 command_id 在机器人端拒绝。
 
@@ -54,14 +55,54 @@ JSON 用于初期可演化的研究字段；每条入口重新校验，不依赖
 
 三个机器人接口都支持命名关节位置命令；关节清单、限位和执行器模式来自用户提供的模型配置，不把固定自由度写死。Go2/G1 额外定义 body velocity 命令接口，但仅在显式加载 locomotion controller 插件后开放；插件需实现 set_velocity、step、stop。通用 PD 能验证关节通信，不证明浮基机器人站立、平衡或行走成功。
 
-机械臂末端 IK、夹爪语义、Go2 步态、G1 全身平衡均需模型对应控制器，当前不伪造。MuJoCo XML 和 mesh 由配置指定，不能假设官方真机 lowcmd 可直接控制 MuJoCo。Unitree 真机接口属于后续独立适配。
+机械臂末端 IK、夹爪语义、Go2 步态、G1 全身平衡均需模型对应控制器，当前不伪造。MuJoCo XML 和 mesh 由配置指定，不能假设官方真机 lowcmd 可直接控制 MuJoCo。Unitree 真机接口属于后续独立适配。步态插件每次调用只写 actuator target；物理积分由 MuJoCo owner 唯一执行。
 
 ## 验证与运行边界
 
 当前开发主机没有 ROS 2，先运行无 ROS 单元与 HTTP 集成测试；ROS action/service 的端到端验证必须在 Ubuntu 安装 ROS 2 并构建接口后运行。MuJoCo 测试按可选依赖执行。测试用动态模型不能当论文世界模型结果，未配置 API 凭据不得声称真实大模型已调用。
+
+当前 macOS 开发环境的验证使用 MuJoCo 3.13.0 探针；`rclpy`/`colcon` 不可用，因此 ROS 2 接口消息生成、executor/action 端到端通信尚未在本环境实测。ROS 源码在 Python 3.12 + ROS 2 Jazzy 的 Ubuntu 24.04 路径需要目标机器构建验证。模型与驱动版本必须在 Ubuntu 机器锁定后复测。
 
 官方接口参考（2026-09-22 查阅）：
 - https://docs.ros.org/en/jazzy/p/rclpy/api/actions.html
 - https://docs.ros.org/en/ros2_documentation/kilted/How-To-Guides/Using-callback-groups.html
 - https://mujoco.readthedocs.io/en/latest/programming/simulation.html
 - https://github.com/unitreerobotics/unitree_ros2
+
+## Ubuntu 24.04 / ROS 2 Jazzy 安装与启动
+
+在目标系统按 ROS 官方文档安装 ros-base、colcon 和接口生成工具。ROS Python 绑定需对运行环境可见；在 source `/opt/ros/jazzy/setup.bash` 后，用系统 Python 建立 `--system-site-packages` 虚拟环境，再安装项目。训练用深度学习框架另行按 GPU 驱动选取和锁定。
+
+```bash
+source /opt/ros/jazzy/setup.bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -e '.[simulation]'
+cd ros2
+colcon build --base-paths wmal_interfaces
+source install/setup.bash
+cd ..
+```
+
+在三个终端分别启动：
+
+```bash
+# 终端 A：单关节探针，只验证 ROS 与 MuJoCo 接口
+source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+PYTHONPATH=src python scripts/serve_ros2.py robot --config configs/robots/interface_probe.json
+
+# 终端 B：提供 DynamicsModel 插件的 world planner
+source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+PYTHONPATH=src:$PWD python scripts/serve_ros2.py planner --plugin your_package.world_model:build_planner
+
+# 终端 C：大模型 API Agent
+source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+export LLM_BASE_URL='https://provider.example/v1'
+export LLM_MODEL='your-model'
+read -s LLM_API_KEY && export LLM_API_KEY
+PYTHONPATH=src python scripts/run_agent.py --config configs/robots/interface_probe.json --instruction 'set hinge to 0.3 radians'
+```
+
+`provider.example` 只是格式示例；API key 只从环境读取，不写入配置文件。规划插件 factory 返回具有 `version` 和 `predict(joints, targets, duration_s)` 的预测模型，再包装为具有 `plan(profile, observation, goal)` 的规划器。当前没有训练完成的模型插件，未提供终端 B 时 Agent 会报 planner unavailable。
+
+Go2/G1 模板需要真实 MuJoCo XML、完整关节限位和 actuator 映射。探针 XML 不是研究机械臂资产，也不代表 Go2/G1 模型已接入。浮基机器人 `base_velocity` 能力只有在 profile 与 locomotion 插件同时配置时才开放。

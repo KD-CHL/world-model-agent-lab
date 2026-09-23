@@ -2,7 +2,7 @@
 from typing import Protocol
 from uuid import uuid4
 import random
-from wmal.communication.contracts import MotionCommand, Plan, finite
+from wmal.communication.contracts import MotionCommand, Plan, PredictionReport, finite
 
 
 class DynamicsModel(Protocol):
@@ -33,12 +33,14 @@ class RolloutPlanner:
             state = dict(observation.joints)
             first = None
             cost = 0.0
-            for _ in range(self.horizon):
+            for depth in range(self.horizon):
                 # Include hold and direct-target candidates; sample others within declared limits.
                 targets = dict(state)
                 for joint, desired in goal.targets.items():
                     lo, hi = profile.joint_limits[joint]
-                    targets[joint] = state[joint] if index == 0 else desired if index == 1 else self.rng.uniform(lo, hi)
+                    reachable_lo = max(lo, state[joint] - profile.max_joint_velocity_rad_s * self.duration_s)
+                    reachable_hi = min(hi, state[joint] + profile.max_joint_velocity_rad_s * self.duration_s)
+                    targets[joint] = state[joint] if index == 0 else min(reachable_hi, max(reachable_lo, desired)) if index == 1 else self.rng.uniform(reachable_lo, reachable_hi)
                 targets = {key: min(profile.joint_limits[key][1], max(profile.joint_limits[key][0], value)) for key, value in targets.items()}
                 if first is None:
                     first = dict(targets)
@@ -51,11 +53,12 @@ class RolloutPlanner:
                     break
                 cost += sum((state[key] - value) ** 2 for key, value in goal.targets.items())
             if best is None or cost < best[0]:
-                best = (cost, first)
+                best = (cost, first, state, depth + 1)
         if best is None or best[0] == float('inf'):
             raise ValueError('No admissible predicted trajectory')
         command = MotionCommand(str(uuid4()), profile.robot_id, observation.episode_id,
                                 observation.step_id, 'joint_positions', best[1], self.duration_s)
-        result = Plan(str(uuid4()), self.model.version, [command])
+        prediction = PredictionReport(self.model.version, observation.step_id, best[3], best[2], best[0])
+        result = Plan(str(uuid4()), self.model.version, [command], prediction)
         result.validate(profile, observation)
         return result

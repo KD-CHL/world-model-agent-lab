@@ -98,4 +98,9 @@ world-model-agent-lab/
   src/wmal/training/trainer.py
   tests/README.md
   docs/08_directory_tree.md
+  docs/09_agent_ros2_design.md
+  ros2/wmal_interfaces/action/ExecuteMotion.action
+  ros2/wmal_interfaces/msg/RobotState.msg
+  ros2/wmal_interfaces/srv/PlanMotion.srv
+  ros2/wmal_interfaces/srv/ResetSimulation.srv
 ```

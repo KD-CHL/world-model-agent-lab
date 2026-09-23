@@ -1,5 +1,6 @@
 {
   "profile": {"robot_id": "arm", "kind": "arm", "joint_limits": {"hinge": [-1, 1]}},
   "model_path": "../../robots/assets/interface_probe.xml",
-  "actuator_map": {"hinge": {"actuator": "servo", "mode": "position"}}
+  "actuator_map": {"hinge": {"actuator": "servo", "mode": "position"}},
+  "locomotion_plugin": null
 }

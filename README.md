@@ -2,7 +2,7 @@
 
 Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
-**当前状态：架构设计与文件骨架。未实现训练、Agent推理或MuJoCo仿真；未验证论文假设。**
+**当前状态：API Agent、HTTP 与 ROS 2 适配、世界模型规划接口和通用 MuJoCo 关节控制已实现。没有训练完成的世界模型、研究机械臂资产或 Go2/G1 步态/平衡控制器。**
 
 ## 阅读顺序
 
@@ -14,19 +14,21 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 6. [实验与数据](docs/06_experiments_and_data.md)
 7. [实施计划与预算](docs/07_delivery_plan.md)
 8. [完整目录树](docs/08_directory_tree.md)
+9. [Agent、ROS 2 设计与启动指南](docs/09_agent_ros2_design.md)
 
-主线提案：动作条件潜在动力学 + 技能结果预测 + 可靠性门控的高层Agent。模块按职责独立组织，不以文献算法命名或预设为其适配器。机器人、算力和软件版本未锁定。
+运行主线：API Agent 解析受限关节目标 → ROS 2 规划服务调用动作条件世界模型 → 规划器返回绑定观测与模型版本的预测和首个动作 → ROS 2 action 驱动 MuJoCo → Agent 读取新状态并滚动重规划。训练模块及正式机器人资产尚未实现。
 
 ## 当前可以执行
 
-在项目根目录运行 `python3 scripts/check_scaffold.py`，仅验证文件、Python语法和JSON。
-`python3 scripts/train.py --help` 可查看预留入口；实际运行明确以非零状态返回 NOT IMPLEMENTED，不生成虚假训练结果。
+Agent 请求 HTTP API，将受限目标交给 ROS 2 世界模型规划服务，再以 ROS 2 action 执行第一步并读取新观测。安装及三终端启动命令见 [启动指南](docs/09_agent_ros2_design.md)。
+
+运行 MuJoCo 探针及本地协议测试：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`。ROS 2 端到端构建与通信需在 Ubuntu 安装 ROS 后验证。纯语法/JSON检查使用 `python3 scripts/check_scaffold.py`；训练入口仍未实现。
 
 ## 目录职责
 
 `configs/` 保存设计参数；`src/wmal/` 按层划分源码位置；`robots/assets/` 预留资产；`scripts/` 预留命令；`examples/` 存接口示例；`data/`、`runs/` 保存未来数据和结果；`tests/` 预留实现后的行为测试。
 
-`requirements-ubuntu.txt` 仅说明依赖锁定流程，不代表完整安装环境。无需安装MuJoCo或GPU依赖即可检查本骨架。原始论文仍在本地文献库，未复制PDF。
+`requirements-ubuntu.txt` 说明依赖边界；MuJoCo 可选依赖在 `pyproject.toml`。原始论文仍在本地文献库，未复制PDF。
 
 ## 命名与实现原则
 

@@ -65,5 +65,5 @@ class ApiModelClient:
             goal = Goal(**obj)
             goal.validate(profile)
             return goal
-        except (KeyError, IndexError, TypeError, UnicodeError, json.JSONDecodeError):
+        except (AttributeError, KeyError, IndexError, TypeError, UnicodeError, json.JSONDecodeError):
             raise ValueError('Invalid model response schema') from None

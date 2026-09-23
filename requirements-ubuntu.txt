@@ -1,2 +1,3 @@
-# Design scaffold only. Pin MuJoCo/PyTorch/CUDA and optional LLM SDK after official compatibility and baseline implementation checks.
-# No training dependencies are installed by this file.
+# Install ROS 2 Jazzy/rclpy and colcon from official Ubuntu ROS repositories.
+# Then install the project in a system-site-packages venv with: pip install -e '.[simulation]'
+# Pin model-training framework against the selected Ubuntu/GPU driver separately.

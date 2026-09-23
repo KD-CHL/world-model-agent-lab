@@ -37,6 +37,7 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
     from rclpy.action import ActionServer, GoalResponse, CancelResponse
     from rclpy.callback_groups import ReentrantCallbackGroup
     from wmal_interfaces.msg import RobotState
+    from wmal_interfaces.srv import ResetSimulation
     from wmal_interfaces.action import ExecuteMotion
 
     class RobotNode(Node):
@@ -49,6 +50,7 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
             self.fault = False
             namespace = '/wmal/' + backend.profile.robot_id
             self.publisher = self.create_publisher(RobotState, namespace + '/state', 1)
+            self.reset_service = self.create_service(ResetSimulation, namespace + '/reset', self.reset)
             self.group = ReentrantCallbackGroup()
             self.action = ActionServer(self, ExecuteMotion, namespace + '/execute_motion',
                                        execute_callback=self.execute, goal_callback=self.accept,
@@ -62,6 +64,23 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
                 message.json = encode(backend.observe())
                 self.publisher.publish(message)
 
+        def reset(self, request, response):
+            del request
+            with self.lock:
+                if self.busy:
+                    response.ok, response.json = False, encode({'error': 'ROBOT_BUSY'})
+                    return response
+                try:
+                    observation = backend.reset()
+                    self.fault = False
+                    self.guard = EpisodeGuard()
+                    response.ok, response.json = True, encode(observation)
+                except Exception as exc:
+                    self.fault = True
+                    self.get_logger().error('Reset failed: ' + type(exc).__name__)
+                    response.ok, response.json = False, encode({'error': 'RESET_FAILED'})
+            return response
+
         def accept(self, request):
             with self.lock:
                 if self.busy or self.fault:
@@ -69,7 +88,10 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
                 try:
                     command = decode(request.json, MotionCommand)
                     backend.interface.validate_command(command)
-                    self.guard.accept(command, backend.observe())
+                    observation = backend.observe()
+                    if command.mode == 'joint_positions' and max(abs(command.values[name] - observation.joints[name]) / command.duration_s for name in command.values) > backend.profile.max_joint_velocity_rad_s:
+                        return GoalResponse.REJECT
+                    self.guard.accept(command, observation)
                 except (ValueError, TypeError, KeyError):
                     return GoalResponse.REJECT
                 self.busy = True
@@ -134,6 +156,9 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
                     self.active = False
                     try:
                         backend.stop()
+                        # Publish a strictly newer state after the command is held.
+                        # The planner can then bind its next request to fresh physics.
+                        backend.step()
                     except Exception:
                         self.fault = True
                     self.busy = False

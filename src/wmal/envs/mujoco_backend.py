@@ -8,7 +8,7 @@ class MujocoBackend:
     """All calls must be serialized by the owner node's lock.
 
     actuator_map: joint -> {actuator, mode: position|pd_torque, kp?, kd?}.
-    Supports limited scalar hinge joints with direct unit-gear actuators.
+    Supports limited scalar hinge/slide joints with direct unit-gear actuators.
     A locomotion plugin, if configured, owns full ctrl while velocity mode is active.
     """
     def __init__(self, model_path, profile, actuator_map, locomotion=None):
@@ -32,8 +32,8 @@ class MujocoBackend:
             if jid < 0 or aid < 0 or aid in used:
                 raise ValueError('Missing or duplicated actuator/joint mapping')
             used.add(aid)
-            if self.model.jnt_type[jid] != mujoco.mjtJoint.mjJNT_HINGE or not self.model.jnt_limited[jid]:
-                raise ValueError('Only limited hinge joints are supported by this adapter')
+            if int(self.model.jnt_type[jid]) not in (int(mujoco.mjtJoint.mjJNT_HINGE), int(mujoco.mjtJoint.mjJNT_SLIDE)) or not self.model.jnt_limited[jid]:
+                raise ValueError('Only limited scalar hinge/slide joints are supported by this adapter')
             if self.model.actuator_trntype[aid] != mujoco.mjtTrn.mjTRN_JOINT or self.model.actuator_trnid[aid, 0] != jid:
                 raise ValueError('Actuator does not directly drive configured joint')
             if self.model.actuator_gear[aid, 0] != 1 or any(self.model.actuator_gear[aid, 1:] != 0):
@@ -80,6 +80,8 @@ class MujocoBackend:
         observation = self.observe()
         if command.episode_id != observation.episode_id or command.expected_step != observation.step_id:
             raise ValueError('Command is not bound to current simulation state')
+        if command.mode == 'joint_positions' and max(abs(command.values[name] - observation.joints[name]) / command.duration_s for name in command.values) > self.profile.max_joint_velocity_rad_s:
+            raise ValueError('Joint target exceeds configured speed limit from current simulation state')
         self.stop()
         self.mode = command.mode
         if command.mode == 'joint_positions':

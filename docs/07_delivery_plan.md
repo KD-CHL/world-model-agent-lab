@@ -1,15 +1,15 @@
 # 分阶段实施与验收
 
-当前状态：设计与文件骨架已创建；训练、MuJoCo、Agent、统计程序均未实现。以下入口为未来接口，不是当前能力。
+当前状态：API Agent、协议校验、世界模型规划插件边界、ROS 2 节点源码与单关节 MuJoCo 执行后端已实现；Ubuntu ROS 集成和学习模型训练尚未验证/实现。研究场景仍未确定。
 
 | 阶段 | 入口设计 | 交付/验收 | 收缩方案 |
 |---|---|---|---|
-| M0仿真通信 | scripts/simulate.py | 资产许可、reset/step、状态单位、旧episode动作拒绝、确定性回放误差测试 | 单进程单物体 |
-| M1数据基线 | scripts/collect.py | 完整回合、失败标签、数据划分；固定技能任务可重复完成 | reach/push两技能 |
-| M2世界模型 | scripts/train.py | 独立控制模块的有限任务验证、学习曲线与未见初态；断点恢复检查 | 单技能固定奖励 |
-| M3 Agent | scripts/run_agent.py | 白名单、结构化候选、检测闭环、超时与恢复 | 固定任务图+离线候选 |
-| M4核心机制 | scripts/train_skill_outcome.py | 技能结果预测/校准、等预算B1/B2/B3消融 | 校准不足回退分数并缩小结论 |
-| M5论文证据 | scripts/evaluate.py及export_results.py | 冻结多种子评估、原始表、图表、失败回放、版本溯源 | 缩减扰动轴而不删失败 |
+| M0 ROS 与接口验证 | ros2/wmal_interfaces + interface_probe.xml | Ubuntu 构建接口，验证 reset/action/state 及旧命令拒绝 | ROS 缺失时以本地 MuJoCo 和 HTTP 为限 |
+| M1 机器人及场景确定 | configs/robots | 引入许可清楚的资产、关节限位和执行器映射 | 保留单关节探针作通信演示 |
+| M2 训练与数据闭环 | scripts/collect.py、scripts/train.py | 补全可恢复训练及数据分割，产生模型插件 | 先状态预测和低维目标 |
+| M3 高层任务 Agent | scripts/run_agent.py | 扩充目标表示、场景检测和技能校验 | 当前 joint_goal 作为协议基线 |
+| M4 Go2/G1 控制 | robot adapter + locomotion plugin | 按真实资产验证关节/速度命令、重置与稳定性 | 无步态插件时禁用 base_velocity |
+| M5 论文实验 | scripts/evaluate.py、scripts/export_results.py | 冻结多种子评估、对照、原始表、失败回放 | 场景和假设确定后设计 |
 
 ## 预算估计方法
 

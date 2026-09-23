@@ -1,15 +1,15 @@
 # 接口契约与 Ubuntu/MuJoCo 调度
 
-全部消息使用版本化 JSON 可序列化对象。必填公共信封：schema_version、request_id(UUID)、episode_id、step_id(控制步非积分步)、sim_time_s、wall_time_utc、model_version。进程内超时使用单调时钟，不能用 UTC 时钟判断 elapsed。重置产生新 episode_id；相同 request_id 重试返回缓存结果，不重复执行动作。
+Agent 与 ROS 2 接口使用 schema_version=1 的 JSON 负载。Observation 包含 robot_id、episode_id、step_id、sim_time_s、命名关节位置。MotionCommand 包含 command_id、机器人和观测标识、模式、有限目标/速度值与持续时长。HTTP/ROS 等待使用本机单调时间计时；ResetSimulation 生成新 episode。机器人节点拒绝旧 episode、旧 step 与重复命令。
 
 | 类型 | 必填字段与语义 |
 |---|---|
 | TaskSpec | task_id、instruction、goal_predicates、constraints、max_control_steps、allowed_skill_ids；谓词引用已注册检测器 |
 | SkillSpec | skill_id、parameter_schema、preconditions、termination_predicates、success_predicates、timeout_steps、recovery_skill_ids、max_retries、controller_version |
 | Observation | robot_q_rad、robot_dq_rad_s、gripper_width_m、objects_pose_world、sensor_validity、capture_step、observation_profile；隐藏扰动参数不得进入本消息 |
-| PredictionReport | candidate_id、skill_id、input_step、valid_until_step、prediction_horizon_steps、outcome_mean、outcome_variance、ensemble_disagreement、success_score、score_semantics、calibration_version、model_version、controller_version、status |
-| ActionCommand | control_mode、values、frame、units、hold_physics_steps、expected_step、deadline_monotonic_ns、controller_version；模式和维度由机器人配置校验 |
-| ExecutionFeedback | candidate_id、skill_id、start/end_step、success、terminated、truncated、termination_reason、observed_predicates、prediction_residual、error_code、detector_version |
+| PredictionReport | model_version、observation_step、horizon_steps、predicted_state、objective_cost、不确定性类型与数据 |
+| MotionCommand | command_id、robot_id、episode_id、expected_step、mode、named values、duration_s；模式和范围按 profile 校验 |
+| ExecutionResult | command_id、succeeded/failed/canceled/rejected/timeout、简短状态 |
 
 约定：右手世界坐标系，长度米、角度弧度、时间秒、力牛顿、力矩牛米；四元数统一 wxyz 并标明朝向。初期统一末端增量位姿+夹爪命令，由机器人适配器转换为关节目标；具体 IK/控制器实现前必须验证，不直接把位姿写入 actuator ctrl。传感器缺失用 null 和有效标志，不能补零冒充观测。
 
@@ -19,9 +19,9 @@
 
 ## 调度提案（未实测）
 
-起始参数：physics_dt=0.002 s，action_repeat=10，控制周期0.020 s；状态每控制步采样，图像/渲染另设周期，初期无图像控制。Agent 仅在技能边界/事件调用。参数必须在目标 Ubuntu 硬件做时延与稳定性实验后调整。
+MuJoCo timer 按模型 timestep 积分，状态单独发布。Agent 在每个 ROS action 完成后等新 step 并重新调用 planner。探针 XML 的 timestep 为 0.002 s；Ubuntu 实时性未验证，项目不作周期截止承诺。
 
-最小方案：单进程直接调用，显式逻辑步进，训练与评估分时运行。异步扩展：每个环境一个 owner 进程；训练器独立进程；结构化控制消息经有界队列传递，大图像后续才用共享内存。ROS 2 仅在实机/外部生态集成时引入，网络中间件仅用于跨机任务。队列易调试但有复制开销；共享内存减少复制但需生命周期和同步；ROS 2 增加配置与部署成本。
+当前架构使用 ROS 2：单机器人仿真 owner 提供 state topic、execute_motion action 和 reset service；独立 planner node 提供 `/wmal/plan`；Agent 调用 API 并作为 ROS client。机器人场景与模型 owner 是唯一物理 step/reset 来源。ROS 2 尚未在当前 macOS 环境构建验证。
 
 加速离线评估允许等待策略而暂停仿真时钟，须报告墙钟开销；实时调度实验不能隐去等待。过期命令拒绝，最多保持上个受限目标一个控制周期，然后进入已验证的保持/停止策略。保持策略本身需场景验证，不等于机械安全保证。
 

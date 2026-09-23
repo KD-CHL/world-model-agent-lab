@@ -27,6 +27,12 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.c.Plan('p1', 'm1', [cmd]).validate(self.profile, self.obs)
 
+    def test_plan_rejects_joint_target_that_exceeds_configured_speed(self):
+        cmd = self.c.MotionCommand('c1', 'arm', 'ep1', 3, 'joint_positions', {'joint': .5}, .1)
+        pred = self.c.PredictionReport('m1', 3, 1, {'joint': .5}, 0.0)
+        with self.assertRaises(ValueError):
+            self.c.Plan('p1', 'm1', [cmd], pred).validate(self.profile, self.obs)
+
     def test_legged_velocity_requires_controller_capability(self):
         interfaces = importlib.import_module('wmal.robots.interfaces')
         for kind, cls in [('go2', interfaces.Go2Interface), ('g1', interfaces.G1Interface)]:
@@ -59,6 +65,8 @@ class RuntimeTests(unittest.TestCase):
         plan.validate(self.profile, self.obs)
         self.assertGreater(plan.commands[0].values['joint'], 0)
         self.assertEqual(plan.model_version, 'test-model')
+        self.assertEqual(plan.prediction.observation_step, self.obs.step_id)
+        self.assertEqual(plan.prediction.predicted_state['joint'], .5)
 
     def test_runner_uses_observed_success_not_action_claim(self):
         runner_module = importlib.import_module('wmal.agents.runner')
@@ -70,7 +78,8 @@ class RuntimeTests(unittest.TestCase):
             def observe(self, timeout_s=5):
                 return c.Observation('arm', 'ep1', 3, .06, {'joint': 0.0})
             def plan(self, profile, observation, goal, timeout_s=5):
-                return c.Plan('p', 'test', [c.MotionCommand('c1', 'arm', 'ep1', 3, 'joint_positions', {'joint': .5}, .2)])
+                pred = c.PredictionReport('test', 3, 1, {'joint': .5}, 0.0)
+                return c.Plan('p', 'test', [c.MotionCommand('c1', 'arm', 'ep1', 3, 'joint_positions', {'joint': .5}, .5)], pred)
             def execute(self, command, timeout_s=5):
                 return c.ExecutionResult('c1', 'succeeded', 'controller claim')
         result = runner_module.AgentRunner(Client(), Channel(), self.profile, max_cycles=1).run('move')
@@ -83,7 +92,9 @@ class RuntimeTests(unittest.TestCase):
             def propose_goal(self, *args): return c.Goal('joint_goal', {'joint': .5})
         class Channel:
             def observe(self, timeout_s=5): return self_obs
-            def plan(self, *args, **kw): return c.Plan('p', 'm', [c.MotionCommand('c', 'arm', 'ep1', 3, 'joint_positions', {'joint': .5}, .2)])
+            def plan(self, *args, **kw):
+                pred = c.PredictionReport('m', 3, 1, {'joint': .5}, 0.0)
+                return c.Plan('p', 'm', [c.MotionCommand('c', 'arm', 'ep1', 3, 'joint_positions', {'joint': .5}, .5)], pred)
             def execute(self, *args, **kw): return c.ExecutionResult('wrong', 'succeeded', '')
         self_obs = self.obs
         result = runner_module.AgentRunner(Client(), Channel(), self.profile).run('move')

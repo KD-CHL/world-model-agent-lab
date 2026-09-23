@@ -2,31 +2,28 @@
 
 ```mermaid
 flowchart TD
- T[TaskSpec] --> A[高层 Agent / 固定规划器]
- A --> C[技能候选与前置条件检查]
- C --> P[独立技能结果模型与校准器]
- P --> G[可靠性门控与重规划]
- G --> S[技能执行器]
- S --> M[潜在动力学控制 动作规划]
- M --> E[动作适配与约束]
- E --> U[MuJoCo 单一 owner]
- U --> O[观测与独立任务检测]
+ T[用户任务] --> A[API Agent]
+ A --> G[受限 joint_goal 校验]
+ G --> P[ROS 2 世界模型规划服务]
+ P --> M[动作条件状态预测与滚动规划]
+ M --> E[机器人能力/限位校验]
+ E --> U[ROS 2 执行动作]
+ U --> S[MuJoCo / 机器人适配器]
+ S --> O[RobotState topic]
  O --> A
- O --> G
- U --> D[轨迹与事件日志]
- D --> L[回放与离线训练]
- L --> V[验证与版本发布]
+ S --> D[轨迹与事件日志]
+ D --> L[未来训练数据]
+ L --> V[模型训练与版本发布 尚未实现]
  V --> P
- V --> M
- D --> R[冻结评估与论文分析]
+ D --> R[冻结评估 尚未实现]
 ```
 
 | 模块 | 输入→输出 | 职责与边界 |
 |---|---|---|
-| agents | TaskSpec/Feedback→技能候选 | 低频规划；不访问物理积分器 |
-| models | 状态/动作或技能→潜在/结果预测 | 区分低层控制模型与技能结果模型 |
-| planners | 候选/PredictionReport→选择或重规划 | 门控不等于安全证明 |
-| skills | SkillSpec→ActionCommand | 超时、终止及恢复次数管理 |
+| agents | 指令/Observation→受限 joint_goal | 调用 HTTP API；不访问物理积分器 |
+| models | 状态与动作候选→未来状态预测 | DynamicsModel 插件接口；当前无已训练模型 |
+| planners | Goal/Observation→PredictionReport 与首个动作 | 滚动规划；不代表安全证明 |
+| skills | SkillSpec→ActionCommand | 技能库预留；尚未接入当前 joint_goal 路径 |
 | envs/robots | ActionCommand→Observation | 唯一状态修改入口；坐标与控制模式适配 |
 | communication | 消息→确认/错误 | 版本、时序和 episode 隔离 |
 | datasets/replay/training | 仿真轨迹→检查点 | 数据来源及训练集边界 |
@@ -35,20 +32,19 @@ flowchart TD
 ```mermaid
 sequenceDiagram
  participant A as Agent
- participant P as 技能预测
- participant S as 技能控制
+ participant P as ROS 2 世界模型规划
+ participant S as ROS 2 机器人 action
  participant E as 仿真owner
  participant L as 日志/检测
- A->>P: 固定候选集合+最新观测
- P-->>A: 结果预测/可信度/有效期
- A->>S: 选定技能+版本
- loop 控制周期
- S->>E: 带step和deadline的动作
- E->>L: 执行动作与后验观测
- L-->>S: 检测/残差/约束状态
- end
- L-->>A: 成功、失败或事件
- A->>A: 更新任务状态；必要时重规划
+ A->>P: profile + observation + goal
+ P-->>A: model version + predicted state + action plan
+ A->>S: 带 episode/step 的第一步命令
+ S->>E: command
+ E->>L: MuJoCo step and new observation
+ L-->>S: action result
+ S-->>A: command receipt
+ E-->>A: fresh RobotState
+ A->>P: 新观测上重新规划
 ```
 
 ```mermaid
@@ -64,6 +60,6 @@ sequenceDiagram
  T->>E: 下个回合原子切换已发布版本
 ```
 
-完整例子：任务要求将被遮挡物体放入容器。Agent 提出直接抓取或先移开遮挡物；前置条件检查与结果预测共同筛选。若直接抓取预测不可信，则选择移开遮挡物；执行器用对应技能嵌入驱动 MPC，MuJoCo 回传结果。物体受扰动移动时，实际残差触发重新观测和候选评估。只有独立的“物体在容器内且保持稳定”检测器确认才完成。此例是设计行为，不是实验结果。
+当前可运行例子只覆盖 joint_goal：Agent 得到关节目标后，请 planner 依据 Observation 和世界模型插件评估目标动作候选；执行首个命令，机器人节点在 MuJoCo owner 中步进并发布新观测；Agent 确认实际关节误差后结束，或再次规划。物体、夹爪或自然语言任务完成判定尚未实现。
 
-删除高层预测反馈后，低层 潜在动力学控制 仍可保留；丢失的是执行前比较候选结果及基于预测偏差触发重规划的能力。用候选排序准确率、无效尝试数、恢复成功率和整任务成功率量化，而非只看语言计划。
+若删除 planner 的动作条件预测，可比较固定目标动作与模型选出的动作，在相同关节初态下测量收敛步数、跟踪误差和模型查询延迟。当前 API Agent 只产生 joint_goal，无法衡量物体级任务恢复能力。

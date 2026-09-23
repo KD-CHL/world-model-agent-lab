@@ -35,6 +35,7 @@ class RobotProfile:
     max_duration_s: float = 5.0
     max_linear_velocity: float = 0.3
     max_yaw_rate: float = 0.5
+    max_joint_velocity_rad_s: float = 1.0
 
     def __post_init__(self):
         identifier(self.robot_id)
@@ -45,7 +46,7 @@ class RobotProfile:
                 raise ValueError('Invalid joint limits')
         if not isinstance(self.capabilities, list) or set(self.capabilities) - {'joint_positions', 'base_velocity'}:
             raise ValueError('Unknown capability')
-        for value in (self.max_duration_s, self.max_linear_velocity, self.max_yaw_rate):
+        for value in (self.max_duration_s, self.max_linear_velocity, self.max_yaw_rate, self.max_joint_velocity_rad_s):
             if finite(value) <= 0:
                 raise ValueError('Limits must be positive')
 
@@ -112,6 +113,8 @@ class MotionCommand:
             raise ValueError('Invalid command duration')
         if self.mode == 'joint_positions':
             profile.validate_targets(self.values)
+            if max(abs(self.values[name] - value) / self.duration_s for name, value in self.values.items()) > profile.max_joint_velocity_rad_s:
+                raise ValueError('Joint target exceeds configured speed limit')
         elif self.mode == 'base_velocity':
             vector(self.values)
             if set(self.values) != {'vx', 'vy', 'yaw_rate'}:
@@ -123,10 +126,34 @@ class MotionCommand:
 
 
 @dataclass
+class PredictionReport:
+    model_version: str
+    observation_step: int
+    horizon_steps: int
+    predicted_state: dict
+    objective_cost: float
+    uncertainty_kind: str = 'unavailable'
+    uncertainty: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.model_version or type(self.observation_step) is not int or self.observation_step < 0:
+            raise ValueError('Invalid prediction provenance')
+        if type(self.horizon_steps) is not int or self.horizon_steps < 1 or finite(self.objective_cost) < 0:
+            raise ValueError('Invalid prediction horizon or cost')
+        vector(self.predicted_state)
+        if self.uncertainty_kind not in ('unavailable', 'ensemble_spread', 'aleatoric_variance', 'calibrated_interval'):
+            raise ValueError('Unknown uncertainty semantics')
+        for value in self.uncertainty.values():
+            if finite(value) < 0:
+                raise ValueError('Uncertainty values must be nonnegative')
+
+
+@dataclass
 class Plan:
     plan_id: str
     model_version: str
     commands: list
+    prediction: PredictionReport | None = None
 
     def validate(self, profile, observation):
         observation.validate(profile)
@@ -138,6 +165,14 @@ class Plan:
             cmd.validate(profile)
             if cmd.episode_id != observation.episode_id or cmd.expected_step != observation.step_id:
                 raise ValueError('Plan bound to stale observation')
+            if cmd.mode == 'joint_positions' and max(abs(cmd.values[name] - observation.joints[name]) / cmd.duration_s for name in cmd.values) > profile.max_joint_velocity_rad_s:
+                raise ValueError('Joint target exceeds configured speed limit from current observation')
+        if self.prediction is None:
+            raise ValueError('World model prediction report is required')
+        if self.prediction.model_version != self.model_version or self.prediction.observation_step != observation.step_id:
+            raise ValueError('Prediction provenance mismatch')
+        if set(self.prediction.predicted_state) != set(observation.joints):
+            raise ValueError('Prediction state does not match robot observation')
 
 
 @dataclass
@@ -172,4 +207,6 @@ def decode(text, cls):
     if cls is Plan:
         payload = dict(payload)
         payload['commands'] = [MotionCommand(**item) for item in payload['commands']]
+        if payload.get('prediction') is not None:
+            payload['prediction'] = PredictionReport(**payload['prediction'])
     return cls(**payload)

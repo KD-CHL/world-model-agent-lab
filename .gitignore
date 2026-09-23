@@ -9,6 +9,11 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.venv/
+ros2/build/
+ros2/install/
+ros2/log/
+**/__pycache__/
 data/*
 !data/README.md
 runs/*

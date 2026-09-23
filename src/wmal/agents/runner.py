@@ -37,7 +37,12 @@ class AgentRunner:
                 plan = self.channel.plan(self.profile, obs, goal, timeout_s=self.timeout_s)
                 plan.validate(self.profile, obs)
                 self.log('plan', {'plan_id': plan.plan_id, 'model_version': plan.model_version,
-                                  'observation_step': obs.step_id, 'command_id': plan.commands[0].command_id})
+                                  'observation_step': obs.step_id, 'command_id': plan.commands[0].command_id,
+                                  'prediction': {'horizon_steps': plan.prediction.horizon_steps,
+                                                 'predicted_state': plan.prediction.predicted_state,
+                                                 'objective_cost': plan.prediction.objective_cost,
+                                                 'uncertainty_kind': plan.prediction.uncertainty_kind,
+                                                 'uncertainty': plan.prediction.uncertainty}})
                 command = plan.commands[0]
                 result = self.channel.execute(command, timeout_s=self.timeout_s)
                 cycles += 1

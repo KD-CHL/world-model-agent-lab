@@ -1,0 +1,4 @@
+---
+bool ok
+# Versioned Observation on success; sanitized error code otherwise.
+string json
