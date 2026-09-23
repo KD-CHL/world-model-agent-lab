@@ -4,6 +4,7 @@ import json
 import math
 
 from wmal.models.latent_dynamics import JointDynamics
+from wmal.logging.manifest import atomic_json, build_manifest, related_path, sha256_file
 
 
 def load_rows(path):
@@ -40,6 +41,12 @@ def train(dataset, checkpoint, *, members=5, seed=0):
                               version=f'joint-dynamics-seed{seed}-n{len(splits["train"])}')
     validation_rmse = prediction_error(model, splits['validation'])
     model.save(checkpoint)
-    return {'checkpoint': str(checkpoint), 'model_version': model.version,
+    report = {'checkpoint': str(checkpoint), 'checkpoint_sha256': sha256_file(checkpoint),
+            'model_version': model.version, 'training_seed': seed,
             'train_transitions': len(splits['train']), 'validation_transitions': len(splits['validation']),
             'test_transitions_reserved': len(splits['test']), 'validation_rmse_rad': validation_rmse}
+    atomic_json(related_path(checkpoint, 'train'), {
+        **build_manifest('dynamics_training', seed, {'dataset': dataset},
+                         {'members': members, 'ridge': 1e-3, 'joint_order': joints}),
+        **report})
+    return report
