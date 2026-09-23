@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-simulation = ["mujoco>=3.2,<4"]
+simulation = ["mujoco>=3.2,<4", "numpy>=1.26,<3"]
 
 [project.scripts]
 wmal-agent = "wmal.agents.cli:run_agent"

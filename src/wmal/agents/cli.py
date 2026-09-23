@@ -40,11 +40,12 @@ def serve():
     parser.add_argument('role', choices=['robot', 'planner'])
     parser.add_argument('--config', help='Robot config, required for robot role')
     parser.add_argument('--plugin', help='Planner factory module:function, required for planner role')
+    parser.add_argument('--checkpoint', help='Trained joint dynamics checkpoint for planner role')
     args = parser.parse_args()
     if args.role == 'robot' and not args.config:
         parser.error('--config required')
-    if args.role == 'planner' and not args.plugin:
-        parser.error('--plugin required; a trained model is not bundled')
+    if args.role == 'planner' and bool(args.plugin) == bool(args.checkpoint):
+        parser.error('planner requires exactly one of --plugin or --checkpoint')
     import rclpy
     from rclpy.executors import MultiThreadedExecutor
     from wmal.communication.plugins import load_factory
@@ -54,7 +55,13 @@ def serve():
     executor = MultiThreadedExecutor(num_threads=4)
     try:
         if args.role == 'planner':
-            node = create_planner_node(load_factory(args.plugin))
+            if args.checkpoint:
+                from wmal.models.latent_dynamics import JointDynamics
+                from wmal.planners.world_planner import RolloutPlanner
+                planner = RolloutPlanner(JointDynamics.load(args.checkpoint))
+            else:
+                planner = load_factory(args.plugin)
+            node = create_planner_node(planner)
         else:
             from wmal.envs.mujoco_backend import MujocoBackend
             config_path = Path(args.config).resolve()

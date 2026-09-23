@@ -21,7 +21,7 @@ flowchart LR
 
 大模型负责把文本转为目标，不返回可直接执行的 Python，也不自行判定机器人任务成功。当前内置目标为 joint_goal（指定命名关节的目标），是与场景解耦的最小执行能力。未来场景目标通过新的目标解析器及规划插件扩展，不把任意自然语言理解能力当成已完成。
 
-世界模型位于规划路径：输入观测、关节目标和机器人约束；输出绑定观测 episode/step 的动作计划。内置 RolloutPlanner 调用独立注入的 DynamicsModel.predict，搜索动作候选并只执行首个动作，然后重新观测与规划。项目不提供预训练世界模型；离线演示使用明确标记的确定性测试模型。真实模型以 module:factory 插件接入，接口包括模型版本。
+世界模型位于规划路径：输入观测、关节目标和机器人约束；输出绑定观测 episode/step 的动作计划。内置 RolloutPlanner 调用独立注入的 DynamicsModel.predict，搜索动作候选并只执行首个动作，然后重新观测与规划。项目现提供可从 MuJoCo 采样训练的低维关节状态基线，正式机器人任务模型仍需训练；也支持 module:factory 插件接入，接口包括模型版本。
 
 ## 模块
 
@@ -91,9 +91,9 @@ cd ..
 source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
 PYTHONPATH=src python scripts/serve_ros2.py robot --config configs/robots/interface_probe.json
 
-# 终端 B：提供 DynamicsModel 插件的 world planner
+# 终端 B：加载本项目训练的探针模型；实际任务可用 --plugin 接入其他规划器
 source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
-PYTHONPATH=src:$PWD python scripts/serve_ros2.py planner --plugin your_package.world_model:build_planner
+PYTHONPATH=src python scripts/serve_ros2.py planner --checkpoint runs/probe/model.json
 
 # 终端 C：大模型 API Agent
 source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
@@ -103,6 +103,6 @@ read -s LLM_API_KEY && export LLM_API_KEY
 PYTHONPATH=src python scripts/run_agent.py --config configs/robots/interface_probe.json --instruction 'set hinge to 0.3 radians'
 ```
 
-`provider.example` 只是格式示例；API key 只从环境读取，不写入配置文件。规划插件 factory 返回具有 `version` 和 `predict(joints, targets, duration_s)` 的预测模型，再包装为具有 `plan(profile, observation, goal)` 的规划器。当前没有训练完成的模型插件，未提供终端 B 时 Agent 会报 planner unavailable。
+`provider.example` 只是格式示例；API key 只从环境读取，不写入配置文件。先按[规划主线](11_planning_world_model_pipeline.md)采样并训练 `runs/probe/model.json`。若使用 `--plugin`，factory 直接返回具有 `plan(profile, observation, goal)` 的规划器。未启动终端 B 时 Agent 会报 planner unavailable。
 
 Go2/G1 模板需要真实 MuJoCo XML、完整关节限位和 actuator 映射。探针 XML 不是研究机械臂资产，也不代表 Go2/G1 模型已接入。浮基机器人 `base_velocity` 能力只有在 profile 与 locomotion 插件同时配置时才开放。

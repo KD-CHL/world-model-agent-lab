@@ -1,12 +1,12 @@
 # 分阶段实施与验收
 
-当前状态：API Agent、协议校验、世界模型规划插件边界、ROS 2 节点源码与单关节 MuJoCo 执行后端已实现；Ubuntu ROS 集成和学习模型训练尚未验证/实现。研究场景仍未确定。
+当前状态：API Agent、协议校验、ROS 2 节点源码、单关节 MuJoCo 执行、状态动力学基线的采样/训练/规划/评估已实现并本地运行；Ubuntu ROS 集成和正式机器人任务训练尚未验证。研究场景仍未确定。
 
 | 阶段 | 入口设计 | 交付/验收 | 收缩方案 |
 |---|---|---|---|
 | M0 ROS 与接口验证 | ros2/wmal_interfaces + interface_probe.xml | Ubuntu 构建接口，验证 reset/action/state 及旧命令拒绝 | ROS 缺失时以本地 MuJoCo 和 HTTP 为限 |
 | M1 机器人及场景确定 | configs/robots | 引入许可清楚的资产、关节限位和执行器映射 | 保留单关节探针作通信演示 |
-| M2 训练与数据闭环 | scripts/collect.py、scripts/train.py | 补全可恢复训练及数据分割，产生模型插件 | 先状态预测和低维目标 |
+| M2 训练与数据闭环 | scripts/collect.py、scripts/train.py、scripts/evaluate.py | 单关节探针已跑通；继续扩展可恢复训练、真实任务状态与多种子统计 | 先状态预测和低维目标 |
 | M3 高层任务 Agent | scripts/run_agent.py | 扩充目标表示、场景检测和技能校验 | 当前 joint_goal 作为协议基线 |
 | M4 Go2/G1 控制 | robot adapter + locomotion plugin | 按真实资产验证关节/速度命令、重置与稳定性 | 无步态插件时禁用 base_velocity |
 | M5 论文实验 | scripts/evaluate.py、scripts/export_results.py | 冻结多种子评估、对照、原始表、失败回放 | 场景和假设确定后设计 |
