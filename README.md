@@ -15,12 +15,15 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 7. [实施计划与预算](docs/07_delivery_plan.md)
 8. [完整目录树](docs/08_directory_tree.md)
 9. [Agent、ROS 2 设计与启动指南](docs/09_agent_ros2_design.md)
+10. [视觉世界模型与动作服务调用设计](docs/10_world_model_call_design.md)
 
 运行主线：API Agent 解析受限关节目标 → ROS 2 规划服务调用动作条件世界模型 → 规划器返回绑定观测与模型版本的预测和首个动作 → ROS 2 action 驱动 MuJoCo → Agent 读取新状态并滚动重规划。训练模块及正式机器人资产尚未实现。
 
 ## 当前可以执行
 
 Agent 请求 HTTP API，将受限目标交给 ROS 2 世界模型规划服务，再以 ROS 2 action 执行第一步并读取新观测。安装及三终端启动命令见 [启动指南](docs/09_agent_ros2_design.md)。
+
+另有独立的视觉动作服务客户端，可按参考项目的 HTTP 协议发送图像/状态历史并取得动作序列；图像采集、机器人动作映射与完整 ROS 闭环尚待具体模型资产接入，见[调用设计](docs/10_world_model_call_design.md)。
 
 运行 MuJoCo 探针及本地协议测试：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`。ROS 2 端到端构建与通信需在 Ubuntu 安装 ROS 后验证。纯语法/JSON检查使用 `python3 scripts/check_scaffold.py`；训练入口仍未实现。
 
