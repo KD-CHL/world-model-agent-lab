@@ -19,7 +19,7 @@ flowchart LR
  S --> A
 ```
 
-大模型负责把文本转为目标，不返回可直接执行的 Python，也不自行判定机器人任务成功。当前内置目标为 joint_goal（指定命名关节的目标），是与场景解耦的最小执行能力。未来场景目标通过新的目标解析器及规划插件扩展，不把任意自然语言理解能力当成已完成。
+大模型负责把文本转为目标，不返回可直接执行的 Python，也不自行判定机器人任务成功。当前内置目标为 joint_goal（指定命名关节的目标），是与场景解耦的最小执行能力。另有显式 `--mode wma-policy` 路径：ROS 机器人节点可发布配置相机的 RGB+同一步 Observation，Agent 把有界历史送至外部 `/predict_action` 服务，只执行 action chunk 第一步，再等新图像/状态。它不替换默认 goal/planner 路径，也不能在空 G1 模板上运行。
 
 世界模型位于规划路径：输入观测、关节目标和机器人约束；输出绑定观测 episode/step 的动作计划。内置 RolloutPlanner 调用独立注入的 DynamicsModel.predict，搜索动作候选并只执行首个动作，然后重新观测与规划。项目现提供可从 MuJoCo 采样训练的低维关节状态基线，正式机器人任务模型仍需训练；也支持 module:factory 插件接入，接口包括模型版本。
 
@@ -30,7 +30,7 @@ flowchart LR
 | agents/api_client.py | OpenAI-compatible Chat Completions HTTP 协议，超时、结构化 JSON 解析、错误去敏 |
 | agents/runner.py | 获取新观测、调用大模型、调用规划器、执行首个动作、验证误差、有限步数退出 |
 | communication/contracts.py | RobotProfile、Observation、Goal、MotionCommand、Plan、ExecutionResult 及 JSON 校验 |
-| communication/ros2_transport.py | 后台 executor、状态订阅、规划 service client、机器人 action client 与取消 |
+| communication/ros2_transport.py | 后台 executor、状态/可选同步 RGB 订阅、规划 service client、机器人 action client 与取消 |
 | robots/interfaces.py | ArmInterface、Go2Interface、G1Interface；检查机器人身份、关节限位与能力 |
 | planners/world_planner.py | 动作条件世界模型协议与可替换 rollout 规划器 |
 | envs/mujoco_backend.py | 命名关节到执行器映射、物理步进、关节观测、位置或 PD 力矩控制 |
@@ -59,7 +59,9 @@ JSON 用于初期可演化的研究字段；每条入口重新校验，不依赖
 
 ## 验证与运行边界
 
-当前开发主机没有 ROS 2，先运行无 ROS 单元与 HTTP 集成测试；ROS action/service 的端到端验证必须在 Ubuntu 安装 ROS 2 并构建接口后运行。MuJoCo 测试按可选依赖执行。测试用动态模型不能当论文世界模型结果，未配置 API 凭据不得声称真实大模型已调用。
+G1 camera publisher 需配置有效 MuJoCo camera 名称及宽高；ROS 接口新增 `RobotSensorFrame` 并依赖 `sensor_msgs`。策略模式还需提供真实 G1 profile/actuator map、显式 state/action 次序与单位/归一化、成功判据插件和外部策略 endpoint。G1 模板有意缺少这些数据，因此不能作为可运行机器人配置。
+
+ROS action/service 的端到端构建与通信验证须在已安装 ROS 2 的 Ubuntu 环境执行。测试用动态模型不能当论文世界模型结果，未配置 API 凭据不得声称真实大模型已调用。
 
 当前 macOS 开发环境的验证使用 MuJoCo 3.13.0 探针；`rclpy`/`colcon` 不可用，因此 ROS 2 接口消息生成、executor/action 端到端通信尚未在本环境实测。ROS 源码在 Python 3.12 + ROS 2 Jazzy 的 Ubuntu 24.04 路径需要目标机器构建验证。模型与驱动版本必须在 Ubuntu 机器锁定后复测。
 

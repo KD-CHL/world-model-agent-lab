@@ -1,0 +1,10 @@
+name: wmal
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy>=1.26,<3
+  - mujoco>=3.2,<4
+  - pip
+  - pip:
+      - -e ".[simulation]"

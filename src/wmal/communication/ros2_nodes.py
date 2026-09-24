@@ -32,11 +32,13 @@ def create_planner_node(planner):
     return PlannerNode()
 
 
-def create_robot_node(backend, tolerance=0.03, stable_steps=5):
+def create_robot_node(backend, tolerance=0.03, stable_steps=5, camera=None):
     from rclpy.node import Node
     from rclpy.action import ActionServer, GoalResponse, CancelResponse
     from rclpy.callback_groups import ReentrantCallbackGroup
     from wmal_interfaces.msg import RobotState
+    if camera is not None:
+        from wmal_interfaces.msg import RobotSensorFrame
     from wmal_interfaces.srv import ResetSimulation
     from wmal_interfaces.action import ExecuteMotion
 
@@ -50,6 +52,18 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
             self.fault = False
             namespace = '/wmal/' + backend.profile.robot_id
             self.publisher = self.create_publisher(RobotState, namespace + '/state', 1)
+            self.camera = camera
+            self.sensor_publisher = None
+            if camera is not None:
+                if (not isinstance(camera, dict) or not camera.get('name')
+                        or type(camera.get('width')) is not int or type(camera.get('height')) is not int
+                        or not 1 <= camera['width'] <= 2048 or not 1 <= camera['height'] <= 2048):
+                    raise ValueError('Camera requires name and bounded integer width/height')
+                camera_id = backend.mj.mj_name2id(backend.model, backend.mj.mjtObj.mjOBJ_CAMERA, camera['name'])
+                if camera_id < 0:
+                    raise ValueError('Configured camera is missing from MuJoCo asset')
+                self.sensor_publisher = self.create_publisher(
+                    RobotSensorFrame, camera.get('topic', namespace + '/sensor_frame'), 1)
             self.reset_service = self.create_service(ResetSimulation, namespace + '/reset', self.reset)
             self.group = ReentrantCallbackGroup()
             self.action = ActionServer(self, ExecuteMotion, namespace + '/execute_motion',
@@ -61,8 +75,22 @@ def create_robot_node(backend, tolerance=0.03, stable_steps=5):
         def publish_state(self):
             with self.lock:
                 message = RobotState()
-                message.json = encode(backend.observe())
+                observation = backend.observe()
+                message.json = encode(observation)
                 self.publisher.publish(message)
+                if self.sensor_publisher is not None:
+                    rgb = backend.render_rgb(camera=self.camera['name'], width=self.camera['width'],
+                                             height=self.camera['height'])
+                    frame = RobotSensorFrame()
+                    frame.observation_json = message.json
+                    frame.camera = self.camera['name']
+                    frame.image.header.stamp = self.get_clock().now().to_msg()
+                    frame.image.header.frame_id = self.camera['name']
+                    frame.image.height, frame.image.width = self.camera['height'], self.camera['width']
+                    frame.image.encoding, frame.image.is_bigendian = 'rgb8', 0
+                    frame.image.step = self.camera['width'] * 3
+                    frame.image.data = rgb.tobytes()
+                    self.sensor_publisher.publish(frame)
 
         def reset(self, request, response):
             del request

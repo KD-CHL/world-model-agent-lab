@@ -18,20 +18,50 @@ def run_agent():
     parser.add_argument('--config', required=True)
     parser.add_argument('--instruction', required=True)
     parser.add_argument('--max-cycles', type=int, default=10)
+    parser.add_argument('--mode', choices=('goal', 'wma-policy'), default='goal')
+    parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--log', default='runs/agent/events.jsonl')
     args = parser.parse_args()
-    from wmal.agents.api_client import ApiModelClient
-    from wmal.agents.runner import AgentRunner
-    from wmal.communication.ros2_transport import Ros2Channel
     from wmal.logging.events import EventLog
     try:
-        profile = RobotProfile(**read_config(args.config)['profile'])
-        llm = ApiModelClient.from_env()
-        with Ros2Channel(profile) as channel:
-            result = AgentRunner(llm, channel, profile, max_cycles=args.max_cycles, log=EventLog(args.log)).run(args.instruction)
+        config = read_config(args.config)
+        profile = RobotProfile(**config['profile'])
+        if args.mode == 'goal':
+            from wmal.agents.api_client import ApiModelClient
+            from wmal.agents.runner import AgentRunner
+            from wmal.communication.ros2_transport import Ros2Channel
+            llm = ApiModelClient.from_env()
+            with Ros2Channel(profile) as channel:
+                result = AgentRunner(llm, channel, profile, max_cycles=args.max_cycles,
+                                     timeout_s=args.timeout, log=EventLog(args.log)).run(args.instruction)
+        else:
+            from wmal.agents.action_runner import ActionPolicyRunner
+            from wmal.communication.ros2_transport import Ros2Channel
+            from wmal.models.action_service import ActionServiceClient
+            from wmal.robots.action_mapping import ActionMapping
+            policy = config.get('wma_policy')
+            camera = config.get('camera')
+            if not isinstance(policy, dict) or not isinstance(camera, dict):
+                raise ValueError('WMA policy mode requires wma_policy and camera configuration')
+            mapping = ActionMapping.from_config(policy.get('action_mapping'), profile)
+            success_checker = None
+            if policy.get('success_plugin'):
+                from wmal.communication.plugins import load_factory
+                success_checker = load_factory(policy['success_plugin'])
+            client = ActionServiceClient(policy['base_url'], policy['model_version'],
+                                         timeout_s=args.timeout)
+            with Ros2Channel(profile, camera=camera) as channel:
+                result = ActionPolicyRunner(
+                    client, channel, profile, mapping,
+                    state_order=policy['state_order'],
+                    history_length=policy.get('history_length', 2),
+                    conditioning_steps=policy.get('conditioning_steps', 1),
+                    success_checker=success_checker,
+                    log=EventLog(args.log)).run(args.instruction, max_cycles=args.max_cycles,
+                                               timeout_s=args.timeout)
         print(json.dumps(asdict(result), ensure_ascii=False))
         return 0 if result.status == 'succeeded' else 1
-    except (ImportError, ValueError, KeyError, OSError) as exc:
+    except (ImportError, ValueError, KeyError, OSError, RuntimeError) as exc:
         parser.exit(2, 'Startup failed: ' + type(exc).__name__ + '; check configuration and ROS setup.\n')
 
 
@@ -79,7 +109,7 @@ def serve():
             model = (config_path.parent / config['model_path']).resolve()
             locomotion = load_factory(config['locomotion_plugin']) if config.get('locomotion_plugin') else None
             backend = MujocoBackend(str(model), profile, config['actuator_map'], locomotion=locomotion)
-            node = create_robot_node(backend)
+            node = create_robot_node(backend, camera=config.get('camera'))
         executor.add_node(node)
         executor.spin()
     except KeyboardInterrupt:

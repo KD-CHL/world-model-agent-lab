@@ -3,6 +3,7 @@ from dataclasses import asdict
 from threading import Condition, Event, Thread
 from time import monotonic
 from wmal.communication.contracts import Observation, Plan, ExecutionResult, encode, decode
+from wmal.communication.observation_history import ObservationHistory, decode_rgb
 
 
 def wait_future(future, timeout_s):
@@ -18,13 +19,15 @@ def wait_future(future, timeout_s):
 
 class Ros2Channel:
     """Owns its rclpy Context. Public methods must run outside executor callbacks."""
-    def __init__(self, profile, state_max_age_s=2.0, planning_service='/wmal/plan'):
+    def __init__(self, profile, state_max_age_s=2.0, planning_service='/wmal/plan', camera=None):
         import rclpy
         from rclpy.context import Context
         from rclpy.node import Node
         from rclpy.executors import MultiThreadedExecutor
         from rclpy.action import ActionClient
         from wmal_interfaces.msg import RobotState
+        if camera is not None:
+            from wmal_interfaces.msg import RobotSensorFrame
         from wmal_interfaces.srv import PlanMotion
         from wmal_interfaces.srv import ResetSimulation
         from wmal_interfaces.action import ExecuteMotion
@@ -43,7 +46,16 @@ class Ros2Channel:
         self._active = None
         self.max_age = state_max_age_s
         namespace = '/wmal/' + profile.robot_id
+        self.camera = camera
+        self._history = None
         self._sub = self.node.create_subscription(RobotState, namespace + '/state', self._state_callback, 1)
+        if camera is not None:
+            if not isinstance(camera, dict) or not camera.get('name'):
+                raise ValueError('Configured camera requires a name')
+            self._history = ObservationHistory(camera=camera['name'])
+            self._sensor_sub = self.node.create_subscription(
+                RobotSensorFrame, camera.get('topic', namespace + '/sensor_frame'),
+                self._sensor_frame_callback, 1)
         self._planner = self.node.create_client(PlanMotion, planning_service)
         self._reset_client = self.node.create_client(ResetSimulation, namespace + '/reset')
         self._motion = ActionClient(self.node, ExecuteMotion, namespace + '/execute_motion')
@@ -66,6 +78,24 @@ class Ros2Channel:
             self._latest, self._received_at = observation, monotonic()
             self._condition.notify_all()
 
+    def _sensor_frame_callback(self, message):
+        if self._history is None:
+            return
+        try:
+            observation = decode(message.observation_json, Observation)
+            observation.validate(self.profile)
+            image = message.image
+            rgb = decode_rgb(image.encoding, image.width, image.height, image.step, bytes(image.data))
+        except (ValueError, TypeError, KeyError):
+            return
+        with self._condition:
+            try:
+                self._history.append_pair(observation, camera=message.camera, width=image.width,
+                                          height=image.height, rgb=rgb, received_at=monotonic())
+            except (ValueError, TypeError):
+                return
+            self._condition.notify_all()
+
     def observe(self, timeout_s=5):
         deadline = monotonic() + timeout_s
         with self._condition:
@@ -79,6 +109,38 @@ class Ros2Channel:
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError('No fresh robot state')
+                self._condition.wait(remaining)
+
+    def observe_with_images(self, history_length=2, timeout_s=5):
+        """Wait for a fresh, exact-step RGB/state history from the configured camera."""
+        if self._history is None:
+            raise RuntimeError('No camera stream configured for this ROS channel')
+        deadline = monotonic() + timeout_s
+        with self._condition:
+            while True:
+                if self._closed:
+                    raise RuntimeError('ROS channel closed')
+                try:
+                    history = self._history.matched_history(history_length, max_age_s=self.max_age)
+                    newest = history[-1].observation
+                    after_ok = (self._after is None or newest.episode_id != self._after[0]
+                                or newest.step_id > self._after[1])
+                    state_current = (self._latest is not None
+                                     and self._latest.episode_id == newest.episode_id
+                                     and self._latest.step_id <= newest.step_id)
+                    if after_ok and state_current:
+                        return history
+                except (TimeoutError, ValueError):
+                    pass
+                if self._after is not None and self._latest is not None:
+                    if (self._latest.episode_id != self._after[0]
+                            or self._latest.step_id > self._after[1]):
+                        # Begin a new bounded camera history after every executed step;
+                        # do not mix pre-action frames with post-action observations.
+                        self._history.clear()
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError('No fresh synchronized camera/state history')
                 self._condition.wait(remaining)
 
     def plan(self, profile, observation, goal, timeout_s=30):
@@ -108,6 +170,8 @@ class Ros2Channel:
         observation.validate(self.profile)
         self._after = None
         with self._condition:
+            if self._history is not None:
+                self._history.clear()
             self._latest, self._received_at = observation, monotonic()
             self._condition.notify_all()
         return observation

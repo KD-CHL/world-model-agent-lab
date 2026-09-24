@@ -15,6 +15,8 @@
 
 第二数据源必须另记来源、原始数据集/模型检查点和父轨迹；外部示范、模型生成视频、模型引导的 MuJoCo 交互分别统计。详见[第二数据源可行性](12_secondary_data_feasibility.md)。训练/验证/测试以 episode 与场景组隔离。测试集不用于阈值、检查点或任务设计调优。训练种子是模型方法的独立重复；一个种子的多个评估回合不能冒充多个训练重复。
 
+新增 LeRobot/WMA 数据入口会保存 dataset repo/revision/license、元数据哈希、state/action 次序、相机规格、whole-episode split 和每个 parquet/video 文件大小（可选全内容 SHA256）。manifest 与 WMA run manifest 应作为实验附件保留；原始数据、视频、模型权重和 run checkpoints 留在仓库外。视觉预测单独输出 held-out 样本 MAE/PSNR，不与关节动力学误差或任务成功率混为一列。
+
 ## 现有代码会输出什么
 
 在项目根目录执行：

@@ -32,6 +32,8 @@ flowchart LR
   T --> P
 ```
 
+G1/UnifoLM 是一条并行研究路径：LeRobot episode 数据 → WMA 上游视频世界模型/决策微调 → 外部动作服务 → 同步 RGB/state 策略闭环。它不替代上图的数值状态模型与候选 rollout，也不会把视频预测误当作 `predicted_state`。数据 manifest、训练启动与外部服务接入见 [UnifoLM 指南](15_unifolm_training_adaptation.md)。
+
 Agent 对模型报告只消费结构化预测；它不直接控制仿真器。执行端仍验证机器人 ID、episode、step、动作模式、持续时间、关节限位与速度限制。每次命令执行后，Agent 将预测的第一步状态与新观测比较，记录每关节残差和 RMSE，再发起下一次计划请求。ensemble spread 被记录为成员差异，尚未校准前不解释为任务失败概率。
 
 训练样本为 `(episode_id, step_id, sim_time_s, before_joints, commanded_joint_target, actual_duration_s, after_joints)`。所有相邻帧随 episode 进入同一数据集合。状态基线由 `scripts/train.py` 训练；可选非线性模型由 `scripts/train_neural_dynamics.py` 训练，仅用 train 拟合、validation 选择、test 最终评估。规划器对每个成员滚动模拟候选序列，只发送第一段；`PredictionReport.predicted_state` 对应执行后第一步，`predicted_terminal_state` 对应规划终点。
@@ -63,3 +65,5 @@ python scripts/serve_ros2.py planner --checkpoint runs/probe/model.pt --device c
 ## 证据边界与下一步
 
 现阶段单关节探针只验证了状态预测/训练/仿真通信骨架；新加入的神经网络、序列优化、图像规划器与快照接口还没有运行验证。探针不能代表机械臂操作或 Go2/G1 控制能力。正式实验应选定资产和技能，测候选排序、逐步/终点预测误差、任务成功率、规划延迟和模型调用预算，并和相同训练数据及动作约束下的直接目标控制对照。
+
+新增 WMA 接入脚本/ROS camera 消息也尚未在本次工作中执行验证。当前 G1 配置仍缺 MuJoCo 资产、关节限位与动作 schema，不应宣称 G1 闭环可运行；实际 GPU/CUDA 能力由用户本机环境提供，项目代码不会替代上游模型的显存与兼容性要求。

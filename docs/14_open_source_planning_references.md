@@ -28,3 +28,21 @@
 - 对机械臂选择一个共享场景中的可重复任务，记录训练/验证/测试回合划分，避免相邻帧泄漏。
 - 先测候选排序能力、多步预测误差、闭环成功率与规划延迟，再决定是否升级模型规模。
 - 单独记录仿真交互步数、模型内部想象步数、预训练数据和计算资源；不得把借鉴方法的论文结果写成本文已验证结果。
+
+## 数据集、Agent 与仿真模块的接入记录
+
+本轮 GitHub 检索补充了以下候选：
+
+| 方向 | 项目 | 选入方式 |
+| --- | --- | --- |
+| 轨迹数据 | [LeRobot](https://github.com/huggingface/lerobot)、[robomimic](https://github.com/ARISE-Initiative/robomimic) | 不复制数据集代码；统一转换到 `wmal.datasets.trajectory.Transition` 的 JSONL 交换格式 |
+| Agent/动作策略 | [LeRobot](https://github.com/huggingface/lerobot)、[openpi](https://github.com/Physical-Intelligence/openpi) | 保留为高层候选生成/策略对照；实际执行仍必须经过本项目的 `ConstrainedTaskPlanner`、关节限制和闭环观测 |
+| 仿真任务 | [RoboCasa](https://github.com/robocasa/robocasa) | 作为后续视觉操作任务的外部仿真适配目标；当前项目继续使用 MuJoCo 协议，不直接引入其依赖 |
+| 世界模型规划 | [TD-MPC2](https://github.com/nicklashansen/tdmpc2) | 与现有 `RolloutPlanner` 做方法对照；不把其训练代码作为核心依赖 |
+
+本轮实际落地的模块是两个稳定边界：`Transition`/JSONL 轨迹交换层，以及
+`ConstrainedTaskPlanner` Agent 提案约束层。这样外部项目只负责提供数据或候选，
+本项目仍统一负责模型版本、预测报告、安全限制、执行回执和重规划。
+
+Unitree UnifoLM-WMA 与 UnifoLM-VLA 的数据准备、微调阶段和适配边界见
+[训练与微调路线](15_unifolm_training_adaptation.md)。
