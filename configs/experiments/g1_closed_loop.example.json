@@ -1,0 +1,29 @@
+{
+  "world_model": {
+    "factory": "your_g1_world_model:load_model",
+    "config": {
+      "checkpoint": "/absolute/path/to/your_g1_world_model_checkpoint",
+      "device": "cuda"
+    },
+    "expected_version": "replace-with-checkpoint-version"
+  },
+  "planner": {
+    "samples": 48,
+    "horizon": 3,
+    "seed": 11,
+    "action_duration_s": 0.5,
+    "max_linear_velocity": 0.35,
+    "max_yaw_rate": 0.6,
+    "uncertainty_weight": 0.02
+  },
+  "agent": {
+    "max_cycles_per_goal": 100,
+    "max_tilt_rad": 0.65,
+    "min_pelvis_height_m": 0.48
+  },
+  "simulator": {
+    "viewer": true,
+    "realtime": true
+  },
+  "log_path": "runs/g1_agent/events.jsonl"
+}

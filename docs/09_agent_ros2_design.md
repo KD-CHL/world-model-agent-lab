@@ -19,7 +19,7 @@ flowchart LR
  S --> A
 ```
 
-大模型负责把文本转为目标，不返回可直接执行的 Python，也不自行判定机器人任务成功。当前内置目标为 joint_goal（指定命名关节的目标），是与场景解耦的最小执行能力。另有显式 `--mode wma-policy` 路径：ROS 机器人节点可发布配置相机的 RGB+同一步 Observation，Agent 把有界历史送至外部 `/predict_action` 服务，只执行 action chunk 第一步，再等新图像/状态。它不替换默认 goal/planner 路径，也不能在空 G1 模板上运行。
+大模型负责把文本转为目标，不返回可直接执行的 Python，也不自行判定机器人任务成功。当前内置目标为 joint_goal（指定命名关节的目标），是与场景解耦的最小执行能力。另有显式 `--mode wma-policy` 路径：ROS 机器人节点可发布配置相机的 RGB+同一步 Observation，Agent 把有界历史送至外部 `/predict_action` 服务，只执行 action chunk 第一步，再等新图像/状态。策略服务与 G1 数据集动作语义尚未闭环验证。
 
 世界模型位于规划路径：输入观测、关节目标和机器人约束；输出绑定观测 episode/step 的动作计划。内置 RolloutPlanner 调用独立注入的 DynamicsModel.predict，搜索动作候选并只执行首个动作，然后重新观测与规划。项目现提供可从 MuJoCo 采样训练的低维关节状态基线，正式机器人任务模型仍需训练；也支持 module:factory 插件接入，接口包括模型版本。
 
@@ -55,15 +55,15 @@ JSON 用于初期可演化的研究字段；每条入口重新校验，不依赖
 
 三个机器人接口都支持命名关节位置命令；关节清单、限位和执行器模式来自用户提供的模型配置，不把固定自由度写死。Go2/G1 额外定义 body velocity 命令接口，但仅在显式加载 locomotion controller 插件后开放；插件需实现 set_velocity、step、stop。通用 PD 能验证关节通信，不证明浮基机器人站立、平衡或行走成功。
 
-机械臂末端 IK、夹爪语义、Go2 步态、G1 全身平衡均需模型对应控制器，当前不伪造。MuJoCo XML 和 mesh 由配置指定，不能假设官方真机 lowcmd 可直接控制 MuJoCo。Unitree 真机接口属于后续独立适配。步态插件每次调用只写 actuator target；物理积分由 MuJoCo owner 唯一执行。
+机械臂末端 IK、夹爪语义、Go2 步态以及真机 G1 控制仍需对应控制器；本地浮基 G1 另有一个独立的 Unitree 预训练策略 MuJoCo 回放入口，见 [G1 本地步行指南](16_g1_local_walking.md)。它不等于 ROS locomotion 插件或真机接口。MuJoCo XML 和 mesh 由配置指定，不能假设官方真机 lowcmd 可直接控制 MuJoCo。Unitree 真机接口属于后续独立适配。步态插件每次调用只写 actuator target；物理积分由 MuJoCo owner 唯一执行。
 
 ## 验证与运行边界
 
-G1 camera publisher 需配置有效 MuJoCo camera 名称及宽高；ROS 接口新增 `RobotSensorFrame` 并依赖 `sensor_msgs`。策略模式还需提供真实 G1 profile/actuator map、显式 state/action 次序与单位/归一化、成功判据插件和外部策略 endpoint。G1 模板有意缺少这些数据，因此不能作为可运行机器人配置。
+本地 G1 固定底座模型位于 `robots/assets/unitree_g1/g1_29dof_fixed_base.xml`，配置为 `configs/robots/g1_fixed_base.json`，包含 29 个关节限位、PD 力矩电机映射和 `pack_camera` RGB 渲染相机。该相机是世界坐标下的观察视角，并非已标定的数据集相机外参。运行 `python scripts/simulate.py --config configs/robots/g1_fixed_base.json --viewer` 后，可按 `N`/`P` 选关节、`[`/`]` 调整当前目标（每次 0.1 rad）、`0` 保持当前位置；该配置固定 pelvis，不支持 locomotion，也没有可动手指/夹爪。独立的浮基行走命令为 `PYTHONPATH=src python scripts/walk_g1.py --steps 10`，使用上游匹配模型和预训练 ONNX 策略，并通过实际足部触地事件计数与跌倒保护。该本地仿真不验证真机控制或 WMA 数据集动作映射；后者仍需核对数据集 state/action 次序、单位、归一化和外部策略 endpoint。
 
 ROS action/service 的端到端构建与通信验证须在已安装 ROS 2 的 Ubuntu 环境执行。测试用动态模型不能当论文世界模型结果，未配置 API 凭据不得声称真实大模型已调用。
 
-当前 macOS 开发环境的验证使用 MuJoCo 3.13.0 探针；`rclpy`/`colcon` 不可用，因此 ROS 2 接口消息生成、executor/action 端到端通信尚未在本环境实测。ROS 源码在 Python 3.12 + ROS 2 Jazzy 的 Ubuntu 24.04 路径需要目标机器构建验证。模型与驱动版本必须在 Ubuntu 机器锁定后复测。
+G1 固定底座关节控制/渲染和浮基策略回放均在本地 `wmal` Conda 环境的 MuJoCo 上验证；浮基回放 10 个触地步后约前进 0.60 m，姿态/高度保护通过。`rclpy`/`colcon` 端到端通信尚未验证；ROS 2 节点在 Ubuntu 24.04 + Jazzy 路径需另行构建检查。
 
 官方接口参考（2026-09-22 查阅）：
 - https://docs.ros.org/en/jazzy/p/rclpy/api/actions.html
@@ -107,4 +107,4 @@ PYTHONPATH=src python scripts/run_agent.py --config configs/robots/interface_pro
 
 `provider.example` 只是格式示例；API key 只从环境读取，不写入配置文件。先按[规划主线](11_planning_world_model_pipeline.md)采样并训练 `runs/probe/model.json`。若使用 `--plugin`，factory 直接返回具有 `plan(profile, observation, goal)` 的规划器。未启动终端 B 时 Agent 会报 planner unavailable。
 
-Go2/G1 模板需要真实 MuJoCo XML、完整关节限位和 actuator 映射。探针 XML 不是研究机械臂资产，也不代表 Go2/G1 模型已接入。浮基机器人 `base_velocity` 能力只有在 profile 与 locomotion 插件同时配置时才开放。
+Go2 仍需要真实 MuJoCo XML、完整关节限位和 actuator 映射。探针 XML 不是研究机械臂资产。G1 固定底座配置用于关节级仿真；另外 `scripts/walk_g1.py` 可独立回放已发布的 G1 速度策略。二者均不自动开放 ROS 中的浮基 `base_velocity` 能力，该能力仍要求 profile 与 ROS locomotion 插件配置齐备。

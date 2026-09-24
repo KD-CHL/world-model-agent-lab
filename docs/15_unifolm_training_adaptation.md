@@ -14,7 +14,7 @@
 | UnifoLM-WMA | Open-X 微调的 WMA-0 Base，再用目标任务数据后训练 | 动作条件未来视频；decision-making 和/或 simulation mode | 视觉预测/策略服务，通过独立适配器提供推理 |
 | UnifoLM-VLA | UnifoLM-VLM-Base 与目标任务 LeRobot/RLDS 数据 | 指令条件动作 chunk | Agent 的动作策略对照，不当作状态转移模型 |
 
-首个端到端研究建议选用与开源数据/权重相匹配的 Unitree G1 桌面操作任务（如 pack camera），固定主相机、机器人状态顺序和动作顺序。项目中的 G1 配置目前仍是空资产模板，必须先补齐 MuJoCo 模型、关节限位、执行器映射与相机，才可做本地仿真闭环；否则先在上游提供的部署/评估路径评测模型，并仅将其作为离线模型结果。
+首个端到端研究建议选用与开源数据/权重相匹配的 Unitree G1 桌面操作任务（如 pack camera），固定主相机、机器人状态顺序和动作顺序。项目已接入 Unitree G1 29-DOF MuJoCo 模型的固定底座衍生版、关节限位、PD 电机映射与 `pack_camera` 渲染相机，可做本地关节物理仿真及 RGB 渲染；此世界坐标相机尚未与数据集外参标定。该模型的手部是无驱动的 rubber-hand 网格，pelvis 固定；数据集与仿真关节映射尚未确认，故仿真资产就绪不等于 WMA 任务闭环就绪。
 
 ## 上游训练方法摘要
 
@@ -141,7 +141,7 @@ VLA 使用其上游 RLDS loader 和训练配置完成 SFT/微调，另存 run/ch
 - `ActionServiceClient` 连接 `/predict_action` 风格的独立 HTTP 服务；`run_agent.py --mode wma-policy` 发送同步相机历史/状态，只映射并执行 chunk 的第一步，然后要求新的同步观测。必须提供 `camera`、`wma_policy.state_order`、action-to-joint 映射、单位、归一化与控制周期。可配置 `success_plugin`（`module:factory` 返回 `(instruction, observation) -> bool` 判据）；无成功检测器时只会在预算耗尽后退出，不会伪报成功。该服务必须由用户在上游或自己的环境中启动，本项目没有捏造未公开的 WMA 服务端。
 - `VideoPredictionProvider` 是独立离线视觉预测协议；通过显式插件对 held-out 序列评估 MAE/PSNR，输出与数字状态模型分开的 JSON/JSONL。不得把未来帧、策略 action chunk 或未经校准的模型分数塞进 `PredictionReport.predicted_state`。
 
-G1 模板的模型路径、关节限位、actuator map 和相机目前仍为空；它只是接口模板，不能用于闭环。需先准备匹配的 G1 MuJoCo 资产、相机名、数据到模型动作 schema 的明确映射和成功判据。训练后还需由上游/自建策略服务提供兼容 `/predict_action` 的 HTTPS 或本机 HTTP endpoint。推荐顺序：核对数据许可和 manifest → 上游 dry-run/小规模训练 → held-out 离线评估 → 验证服务协议和动作映射 → 准备匹配 G1 资产后做仿真闭环 → 最后开展对照实验。WMA/VLA 训练依赖与当前 `wmal` 环境分开，避免 CUDA/PyTorch/FlashAttention 依赖冲突。
+G1 固定底座模型路径、29 个关节限位、全部 actuator map 和 `pack_camera` 已在 `configs/robots/g1_fixed_base.json` 配置，可运行命令行 MuJoCo 仿真。仍需确认数据集 state/action 顺序、单位、归一化与模型控制语义，添加有驱动的 gripper（若研究任务需要抓取）和成功判据。训练后还需由上游/自建策略服务提供兼容 `/predict_action` 的 HTTPS 或本机 HTTP endpoint。推荐顺序：核对数据许可和 manifest → 上游 dry-run/小规模训练 → held-out 离线评估 → 验证服务协议和动作映射 → 在固定底座仿真验证可映射动作 → 最后开展对照实验。WMA/VLA 训练依赖与当前 `wmal` 环境分开，避免 CUDA/PyTorch/FlashAttention 依赖冲突。
 
 ## 许可证与可复现性
 

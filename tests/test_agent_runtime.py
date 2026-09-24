@@ -63,10 +63,11 @@ class RuntimeTests(unittest.TestCase):
         goal = self.c.Goal('joint_goal', {'joint': .5})
         plan = planner.plan(self.profile, self.obs, goal)
         plan.validate(self.profile, self.obs)
-        self.assertGreater(plan.commands[0].values['joint'], 0)
+        first_target = plan.commands[0].values['joint']
+        self.assertGreater(first_target, 0)
         self.assertEqual(plan.model_version, 'test-model')
         self.assertEqual(plan.prediction.observation_step, self.obs.step_id)
-        self.assertEqual(plan.prediction.predicted_state['joint'], .5)
+        self.assertAlmostEqual(plan.prediction.predicted_state['joint'], first_target)
 
     def test_runner_uses_observed_success_not_action_claim(self):
         runner_module = importlib.import_module('wmal.agents.runner')

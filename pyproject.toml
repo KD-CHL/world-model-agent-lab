@@ -11,6 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 simulation = ["mujoco>=3.2,<4", "numpy>=1.26,<3"]
+walking = ["onnxruntime>=1.18,<2"]
 learning = ["numpy>=1.26,<3", "torch>=2.2"]
 robot-data = ["huggingface_hub>=0.24", "PyYAML>=6"]
 

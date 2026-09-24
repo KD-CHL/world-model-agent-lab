@@ -7,4 +7,4 @@ dependencies:
   - mujoco>=3.2,<4
   - pip
   - pip:
-      - -e ".[simulation]"
+      - -e ".[simulation,walking]"
