@@ -42,6 +42,8 @@ class G1RolloutPlanner:
         self.action_duration_s = float(action_duration_s)
         self.max_linear_velocity, self.max_yaw_rate = float(max_linear_velocity), float(max_yaw_rate)
         self.uncertainty_weight = float(uncertainty_weight)
+        self.feedback_scale = 1.0
+        self.scene = None
 
     def _sequences(self, state, goal):
         rng = np.random.default_rng(self.seed + state.step_id)
@@ -61,10 +63,15 @@ class G1RolloutPlanner:
         sequences[0, :, :] = (0.0, 0.0, 0.0)
         sequences[1, :, :] = (forward, 0.0,
                               float(np.clip(heading_error, -self.max_yaw_rate, self.max_yaw_rate)))
+        # Include a body-frame translation proposal for reverse/lateral goals.
+        c, s = math.cos(state.yaw), math.sin(state.yaw)
+        gain = min(self.max_linear_velocity / max(distance, 1e-9),
+                   1. / (self.action_duration_s * self.horizon))
+        sequences[3, :, :] = ((c*dx+s*dy)*gain, (-s*dx+c*dy)*gain, 0.)
         if goal.yaw is not None:
             turn = float(np.clip(_wrap_angle(goal.yaw - state.yaw), -self.max_yaw_rate, self.max_yaw_rate))
             sequences[2, :, :] = (0.0, 0.0, turn)
-        return sequences
+        return sequences * self.feedback_scale
 
     def _score(self, state, goal, sequence):
         current = state
@@ -75,6 +82,9 @@ class G1RolloutPlanner:
             action = G1VelocityAction(float(values[0]), float(values[1]), float(values[2]),
                                      self.action_duration_s)
             prediction = self.model.predict(current, action, action.duration_s)
+            if self.scene is not None and not self.scene.segment_free(
+                    (current.x, current.y), (prediction.state.x, prediction.state.y)):
+                return float('inf'), None, None
             current = prediction.state
             if (current.pelvis_height < 0.48 or abs(current.roll) > 0.65
                     or abs(current.pitch) > 0.65):

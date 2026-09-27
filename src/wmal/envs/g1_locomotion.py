@@ -64,7 +64,7 @@ ARMATURE = np.asarray((
 ), dtype=np.float64)
 
 
-def build_g1_model(xml_path=MODEL_XML):
+def build_g1_model(xml_path=MODEL_XML, scene=None):
     """Compile a floating-base model with official policy gains and contact shapes."""
     import mujoco
 
@@ -73,6 +73,8 @@ def build_g1_model(xml_path=MODEL_XML):
     spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     spec.worldbody.add_geom(name='wmal_ground', type=mujoco.mjtGeom.mjGEOM_PLANE,
                             size=[0, 0, 0.05], friction=[0.8, 0.01, 0.001])
+    if scene is not None:
+        scene.populate(spec, mujoco)
     for index, name in enumerate(JOINT_NAMES):
         joint = spec.joint(name)
         if joint is None:

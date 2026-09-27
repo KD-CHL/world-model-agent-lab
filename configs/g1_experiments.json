@@ -1,0 +1,146 @@
+{
+  "schema": "wmal.g1.experiments.v1",
+  "experiments": [
+    {
+      "id": "01_forward",
+      "name": "直行到点",
+      "scene": "open",
+      "goals": [
+        [
+          1.5,
+          0
+        ]
+      ],
+      "cycles": 80
+    },
+    {
+      "id": "02_reverse",
+      "name": "后退到点",
+      "scene": "open",
+      "goals": [
+        [
+          -0.6,
+          0
+        ]
+      ],
+      "cycles": 100
+    },
+    {
+      "id": "03_lateral",
+      "name": "侧向目标",
+      "scene": "open",
+      "goals": [
+        [
+          0,
+          1
+        ]
+      ],
+      "cycles": 100
+    },
+    {
+      "id": "04_diagonal",
+      "name": "斜向到点",
+      "scene": "open",
+      "goals": [
+        [
+          1.5,
+          1
+        ]
+      ],
+      "cycles": 100
+    },
+    {
+      "id": "05_heading",
+      "name": "指定朝向停靠",
+      "scene": "open",
+      "goals": [
+        [
+          1,
+          0,
+          1.5707963267948966
+        ]
+      ],
+      "cycles": 150
+    },
+    {
+      "id": "06_obstacle",
+      "name": "中央障碍绕行",
+      "scene": "indoor",
+      "goals": [
+        [
+          4,
+          0
+        ]
+      ],
+      "cycles": 150
+    },
+    {
+      "id": "07_corridor",
+      "name": "狭窄通道",
+      "scene": "corridor",
+      "goals": [
+        [
+          4,
+          0
+        ]
+      ],
+      "cycles": 150
+    },
+    {
+      "id": "08_patrol",
+      "name": "多点巡航",
+      "scene": "open",
+      "goals": [
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "cycles": 100
+    },
+    {
+      "id": "09_return",
+      "name": "绕障往返",
+      "scene": "indoor",
+      "goals": [
+        [
+          4,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "cycles": 150
+    },
+    {
+      "id": "10_delivery",
+      "name": "多站点配送",
+      "scene": "indoor",
+      "goals": [
+        [
+          0.5,
+          -1.5
+        ],
+        [
+          3.2,
+          -0.9
+        ],
+        [
+          4,
+          0
+        ]
+      ],
+      "cycles": 150
+    }
+  ]
+}

@@ -2,6 +2,28 @@
 
 Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
+## G1 世界模型规划研究入口
+
+新增 [十项动作规划实验与模型训练优化](docs/18_ten_experiments.md)：批量运行任务、多个规划种子、阶段结果统计，以及验证集多步预测选型。
+
+室内绕障实验：`python scripts/g1_agent_sim.py --config configs/g1_indoor.json`，输入目标 `4 0`。
+场景、agent 分层规划和无窗口评估见 [室内规划指南](docs/17_indoor_navigation.md)。
+
+新增可训练的底座动力学集成、预测残差反馈和完整采集/训练/评估命令。
+详见 [研究架构与完整运行指南](docs/16_g1_research_architecture.md)。
+
+```bash
+conda activate wmal
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+python scripts/g1_research.py collect --episodes 12 --steps 30
+python scripts/g1_research.py train
+python scripts/g1_research.py evaluate --feedback --steps 100
+python scripts/g1_agent_sim.py --config configs/g1_research.json
+```
+
+交互提示中输入 `1 0` 设置世界坐标目标；任务结束后窗口继续接受新目标，输入 `quit` 退出。
+训练模型是轻量行走状态预测基线；UniFoLM 视频模型需要额外适配，不能用操作数据的动作维度直接替代底座速度指令。
+
 **当前状态：** 原有 API Agent、ROS 2/MuJoCo 状态规划基线继续保留；G1 固定底座关节测试与浮动底座行走分开配置。行走测试使用 Unitree 官方 `unitree_rl_mjlab` 的同源 G1 碰撞模型和已发布速度策略 ONNX，在本地 MuJoCo 验证脚步触地、前进位移、机身高度和倾斜；该验证不代表真机安全或 sim-to-real 验证。UnifoLM 数据集动作映射、外部 WMA 推理服务和完整训练仍需单独验证；未捆绑上游 WMA 代码或数据。
 
 ## 阅读顺序

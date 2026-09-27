@@ -1,6 +1,7 @@
 """Task-scoped Agent loop; simulator-session lifetime remains with its caller."""
 from dataclasses import dataclass
 import math
+import time
 
 from wmal.locomotion.contracts import G1Goal, G1State
 
@@ -15,12 +16,13 @@ class G1TaskResult:
 
 class G1Agent:
     def __init__(self, planner, *, max_tilt_rad=0.65, min_pelvis_height_m=0.48,
-                 log=None):
+                 log=None, feedback=None):
         if not 0 < max_tilt_rad < 1.2 or min_pelvis_height_m <= 0:
             raise ValueError('Invalid Agent safety limits')
         self.planner = planner
         self.max_tilt_rad, self.min_pelvis_height_m = max_tilt_rad, min_pelvis_height_m
         self.log = log or (lambda event, payload: None)
+        self.feedback = feedback
 
     @staticmethod
     def _goal_reached(state, goal):
@@ -55,10 +57,13 @@ class G1Agent:
                     return G1TaskResult('succeeded', cycles, 'Goal observed within tolerance', state)
                 if cycles >= max_cycles:
                     return G1TaskResult('budget_exhausted', cycles, 'Goal not reached within cycle budget', state)
+                planning_start = time.perf_counter()
                 plan = self.planner.plan(state, goal)
+                planning_latency_s = time.perf_counter() - planning_start
                 if plan.observation_step != state.step_id:
                     raise ValueError('Planner returned a stale plan')
                 self.log('plan', {'episode_id': episode, 'observation_step': state.step_id,
+                                  'planning_latency_s': planning_latency_s,
                                   'model_version': plan.model_version,
                                   'action': {'vx': plan.action.vx, 'vy': plan.action.vy,
                                              'yaw_rate': plan.action.yaw_rate,
@@ -72,6 +77,11 @@ class G1Agent:
                 state = session.observe()
                 if not isinstance(state, G1State):
                     raise ValueError('Simulator returned an incompatible G1 observation')
+                if (state.episode_id != previous.episode_id or state.step_id <= previous.step_id
+                        or state.sim_time_s <= previous.sim_time_s):
+                    raise ValueError('Simulator observation is stale or changed episode')
+                if self.feedback is not None:
+                    self.log('feedback', self.feedback.update(plan.predicted_state, state, self.planner))
                 self.log('prediction_residual', {
                     'episode_id': state.episode_id, 'observation_step': state.step_id,
                     'model_version': plan.model_version,
@@ -80,5 +90,5 @@ class G1Agent:
                     'yaw_error_rad': abs((state.yaw - plan.predicted_state.yaw + math.pi)
                                          % (2 * math.pi) - math.pi)})
         except (ValueError, TypeError, RuntimeError, OSError) as exc:
-            self.log('failure', {'error_type': type(exc).__name__})
+            self.log('failure', {'error_type': type(exc).__name__, 'detail': str(exc)})
             return G1TaskResult('failed', cycles, type(exc).__name__)

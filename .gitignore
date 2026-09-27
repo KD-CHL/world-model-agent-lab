@@ -16,5 +16,14 @@ ros2/log/
 **/__pycache__/
 data/*
 !data/README.md
+# Keep dataset provenance manifests, but never commit large raw datasets.
+!data/manifests/
+!data/manifests/*.json
+!data/raw/
+data/raw/*
+!data/raw/lerobot/
+data/raw/lerobot/*
+!data/raw/lerobot/unitree_g1_pack_camera/
+data/raw/lerobot/unitree_g1_pack_camera/
 runs/*
 !runs/README.md

@@ -40,13 +40,13 @@ WMA 的数据准备脚本以 Hugging Face LeRobot V2.1 为输入，将视频、�
 
 ## 数据获取与目录约定
 
-1. 从 [UnifoLM-WMA 数据集说明](https://github.com/unitreerobotics/unifolm-world-model-action#dataset) 或 [Unitree Hugging Face datasets](https://huggingface.co/unitreerobotics/datasets) 选择任务数据；记录 Hugging Face dataset repo、revision、下载时间和该 dataset 自身的 license。
+1. 首选 [Unitree G1 Dex1 MountCameraRedGripper 数据集](https://huggingface.co/datasets/unitreerobotics/G1_Dex1_MountCameraRedGripper_Dataset)：上游 WMA 将其列为 G1 数据集；Hugging Face 页面标注 Apache-2.0、LeRobot v2.1、201 episodes / 172,649 frames、约 5.83 GB，state/action 均为 16 维。数据有多个视角；WMA 只支持主视角，当前示例选用 `observation.images.cam_left_high`。数据 commit 固定为 `3f94cbcbbb63dde2440c4a3bebd2f827e41d52df`（上游 `v2.1` tag 指向该数据版本）。WMA 官方训练配置中的 dataset key 是 `unitree_g1_pack_camera`，因此转换产物目录名、CSV 名和训练配置 key 必须严格一致。
 2. 大型数据、视频和权重存放在仓库外的持久数据盘，避免提交到 Git。建议：
 
 ```text
 /data/robot-world-model/
-  raw/lerobot/<dataset-repo>/       # 下载的只读原始数据
-  prepared/wma/<dataset-name>/      # WMA 上游转换结果
+  raw/lerobot/unitree_g1_pack_camera/ # 下载的只读原始数据，目录名供上游 dataset key 使用
+  prepared/wma/                       # 转换器会创建 unitree_g1_pack_camera/ 子目录
   prepared/vla/<dataset-name>/      # VLA 的 HDF5/RLDS 转换结果
   manifests/<dataset-name>.json     # revision、license、机器人、相机、维数、转换版本、划分
   checkpoints/wma/<experiment>/    # 上游训练 checkpoint
@@ -56,27 +56,36 @@ WMA 的数据准备脚本以 Hugging Face LeRobot V2.1 为输入，将视频、�
 3. 保留原始 episode ID，并按 episode/task/场景划分 train、validation、test。禁止把同一 episode 的相邻帧分到不同 split。统计量只从 train 计算；保存 action/state 的单位、顺序、归一化范围和控制周期。
 4. WMA 当前转换器说明针对 LeRobot V2.1 的目录布局，具体下载版本应先核对 `meta/info.json`、`meta/tasks.jsonl`、episode parquet 与视频流是否匹配其预期。VLA 的 LeRobot 转换链不同，不复用 WMA 输出目录。
 
-本项目提供 `scripts/prepare_wma_dataset.py`，默认只校验本地数据；只有显式加 `--download` 才下载。示例使用 WMA README 对应的 G1 pack-camera 数据集，需先确认数据集页面许可及访问条件：
+本项目提供 `scripts/prepare_wma_dataset.py`，默认只校验本地数据；只有显式加 `--download` 才下载。数据页面的完整 commit SHA 已在命令中固定：
 
 ```bash
 python -m pip install -e '.[robot-data]'
+hf auth login
 PYTHONPATH=src python scripts/prepare_wma_dataset.py \
-  --root /data/robot-world-model/raw/lerobot/g1_pack_camera \
+  --root /data/robot-world-model/raw/lerobot/unitree_g1_pack_camera \
   --dataset-id unitreerobotics/G1_Dex1_MountCameraRedGripper_Dataset \
-  --revision v2.1 --license-id '<核实后的数据集许可标识>' \
-  --download --seed 4 --hash-episode-files
+  --revision 3f94cbcbbb63dde2440c4a3bebd2f827e41d52df --license-id apache-2.0 \
+  --camera-key observation.images.cam_left_high \
+  --download --seed 4
 ```
 
-脚本验证固定的 LeRobot V2.1 `meta/`、parquet 与 `videos/` 布局，并在原始 episode 粒度生成确定性 train/validation/test manifest。完整哈希会读取全部视频和 parquet，数据很大时可先省略 `--hash-episode-files`。通过许可核验后可显式调用上游转换器：
+`observation.images.cam_left_high` 已在数据集 `meta/info.json` 中列出；若改用其他版本，仍需重新核实相机 key。脚本会拒绝 `main` 和短 SHA，验证 LeRobot V2.1 `meta/`、parquet 与视频布局，并按 episode 生成确定性 train/validation/test manifest。若希望对所有 episode 数据文件计算完整 SHA256，再加 `--hash-episode-files`（会顺序读取数 GB 数据）。
+
+转换器会处理完整数据集；当前本地 manifest 的 train/validation/test 划分不会自动传给 WMA 上游训练器。因此需在论文实验中明确 WMA 的评估划分策略：用转换产物中的 episode metadata 实施 episode 级切分，或先生成独立 train-only 源数据集再转换；不能把当前脚本写出的 split 当成已应用的训练隔离。
+
+官方 `prepare_training_data.py` 会把所有视角写进 CSV，且只对 AV1 输入生成目标视频、跳过其他编码。本项目封装在转换后会自动将 CSV 限定为指定相机，并把上游遗漏的源视频补到目标目录；仍需对转换结果做一次视频可解码性检查。封装不会修改上游仓库。
+
+验证 manifest 无误后，可显式调用官方转换器：
 
 ```bash
 PYTHONPATH=src python scripts/prepare_wma_dataset.py \
-  --root /data/robot-world-model/raw/lerobot/g1_pack_camera \
+  --root /data/robot-world-model/raw/lerobot/unitree_g1_pack_camera \
   --dataset-id unitreerobotics/G1_Dex1_MountCameraRedGripper_Dataset \
-  --revision v2.1 --license-id '<核实后的数据集许可标识>' \
+  --revision 3f94cbcbbb63dde2440c4a3bebd2f827e41d52df --license-id apache-2.0 \
+  --camera-key observation.images.cam_left_high \
   --convert --wma-root /opt/unifolm-world-model-action \
   --prepared-root /data/robot-world-model/prepared/wma \
-  --manifest /data/robot-world-model/manifests/g1_pack_camera.json
+  --manifest /data/robot-world-model/manifests/unitree_g1_pack_camera.json
 ```
 
 此转换命令在 WMA 上游仓库中运行，不属于当前项目的 `scripts/collect.py`。转换后先检查 episode 数量、视频解码、state/action shape、帧数对齐及数据集统计量，再开始昂贵的训练。
@@ -93,15 +102,17 @@ git clone --recurse-submodules https://github.com/unitreerobotics/unifolm-world-
 cd unifolm-world-model-action
 pip install -e .
 pip install -e external/dlimp
+# 在此环境中也安装本项目的训练辅助脚本及其 YAML/HF 依赖
+pip install -e '/path/to/world-model-agent-lab-main[robot-data]'
 ```
 
-从 [WMA Hugging Face 模型页](https://huggingface.co/unitreerobotics/UnifoLM-WMA-0-Base) 获取 Base checkpoint。项目脚本生成独立配置，不修改上游 checkout。`--dataset-key` 必须是当前 WMA checkout 已注册的 loader 名称；默认模板中的其余训练参数仍由研究者按 GPU 显存、数据维数和验证方案审阅：
+从 [WMA Hugging Face 模型页](https://huggingface.co/unitreerobotics/UnifoLM-WMA-0-Base) 登录并接受访问条件后下载 `unifolm_wma_base.ckpt`。模型页的当前 commit 固定为 `b7bb75323e8c614fb9b0d25905d07a0fc11e1793`。官方 WMA 配置和训练记录使用的 G1 loader key 为 `g1_pack_camera`；使用当前官方 WMA checkout 前，仍要确认该 key 在其 config/loader 中存在，且转换后的 CSV 只引用选定的主视角。项目脚本生成独立配置，不修改上游 checkout：
 
 ```bash
 PYTHONPATH=src python scripts/train_unifolm_wma.py \
   --upstream-root /opt/unifolm-world-model-action \
-  --checkpoint /data/robot-world-model/checkpoints/wma/WMA-0-Base \
-  --prepared-data /data/robot-world-model/prepared/wma/g1_pack_camera \
+  --checkpoint /data/robot-world-model/checkpoints/wma/WMA-0-Base/unifolm_wma_base.ckpt \
+  --prepared-data /data/robot-world-model/prepared/wma \
   --dataset-key unitree_g1_pack_camera --mode decision \
   --config-output /data/robot-world-model/configs/g1_pack_decision.yaml \
   --run-name g1-pack-decision-s0 \
@@ -110,6 +121,14 @@ PYTHONPATH=src python scripts/train_unifolm_wma.py \
 ```
 
 先人工检查生成配置和 dry-run 命令，再去掉 `--dry-run` 开始训练。`--processes` 是每节点 GPU/进程数，可用 `--cuda-visible-devices 0,1` 明确选择设备；训练配置、基础权重哈希、命令与日志记录在独立 run 目录。decision-only 与 joint decision+simulation 用不同 `--mode`、配置和输出目录。不要未经显存评估就照搬上游 8-GPU 示例。
+
+```bash
+hf download unitreerobotics/UnifoLM-WMA-0-Base unifolm_wma_base.ckpt \
+  --repo-type model --revision b7bb75323e8c614fb9b0d25905d07a0fc11e1793 \
+  --local-dir /data/robot-world-model/checkpoints/wma/WMA-0-Base
+```
+
+随后将上一条训练命令的 `--checkpoint` 参数改为 `/data/robot-world-model/checkpoints/wma/WMA-0-Base/unifolm_wma_base.ckpt`。模型为 gated repo，须先在网页接受访问条件并通过 `hf auth login` 登录。注意：Hub 的 license 元数据标为 Apache-2.0，但模型卡正文指向 CC BY-NC-SA 4.0；这属于许可信息冲突，使用前应以权重随附许可证/权利人说明为准，未澄清前按限制更严格的 CC BY-NC-SA 4.0 处理，不要据此宣称可商业使用。
 
 若需要完全手动控制，也可在上游 `scripts/train.sh` 设置实验名 `name` 和 `save_root`，然后执行：
 
@@ -145,7 +164,7 @@ G1 固定底座模型路径、29 个关节限位、全部 actuator map 和 `pack
 
 ## 许可证与可复现性
 
-WMA GitHub 仓库当前声明 **CC BY-NC-SA 4.0**。遵守署名、非商业和相同方式共享等条款；不要将其源码、权重或其衍生 checkpoint 混入本项目 MIT 许可产物并宣称可任意商用。代码、预训练权重和每个 Hugging Face 数据集的许可证须分别核查。
+WMA GitHub 仓库声明 **CC BY-NC-SA 4.0**；Base 模型页的 Hub license 元数据标为 Apache-2.0，但卡片正文又写 CC BY-NC-SA 4.0，存在冲突。权重使用前应以随附许可证/权利人说明澄清，在此之前按较严格的 CC BY-NC-SA 4.0 限制处理，不作商业用途，也不将源码、权重或衍生 checkpoint 混入本项目 MIT 产物并宣称可任意商用。数据集页另标 Apache-2.0；源码、权重和数据分别核查许可。
 
 检索时 VLA 仓库根目录未发现 `LICENSE` 文件；在确认仓库代码、模型卡和各 dataset 的明确许可前，只记录为研究参考，不复制源码或权重，也不对外再分发。许可证缺失不代表自动获得授权。
 

@@ -14,7 +14,7 @@ from wmal.locomotion.contracts import G1State, G1VelocityAction
 class G1MuJoCoSession(AbstractContextManager):
     """Long-lived simulator; task completion never owns or closes this session."""
 
-    def __init__(self, *, viewer=True, realtime=True):
+    def __init__(self, *, viewer=True, realtime=True, scene=None):
         try:
             import mujoco
         except ImportError as exc:
@@ -23,7 +23,8 @@ class G1MuJoCoSession(AbstractContextManager):
         if not POLICY_ONNX.is_file():
             raise FileNotFoundError(f'Pretrained G1 low-level policy is missing: {POLICY_ONNX}')
         self.mj = mujoco
-        self.model = build_g1_model()
+        self.model = build_g1_model(scene=scene)
+        self.scene = scene
         self.data = mujoco.MjData(self.model)
         mujoco.mj_resetData(self.model, self.data)
         self.data.qpos[:3] = [0.0, 0.0, 0.8]
@@ -58,6 +59,10 @@ class G1MuJoCoSession(AbstractContextManager):
                 self.viewer.cam.azimuth = 135
                 self.viewer.cam.elevation = -18
                 self.viewer.cam.lookat[:] = [0.0, 0.0, 0.8]
+                if scene is not None:
+                    self.viewer.cam.distance = 9.
+                    self.viewer.cam.elevation = -65
+                    self.viewer.cam.lookat[:] = [2., 0., .3]
             except (ImportError, RuntimeError) as exc:
                 self.close()
                 raise RuntimeError('MuJoCo viewer could not be started') from exc
@@ -101,6 +106,8 @@ class G1MuJoCoSession(AbstractContextManager):
             if remaining > 0:
                 time.sleep(remaining)
         state = self.observe()
+        if self.scene is not None and not self.scene.segment_free((state.x, state.y), (state.x, state.y)):
+            raise RuntimeError('G1 entered obstacle clearance margin')
         if state.pelvis_height < 0.48 or abs(state.roll) > 0.85 or abs(state.pitch) > 0.85:
             raise RuntimeError(f'G1 safety stop at simulation time {self.data.time:.2f}s')
 
@@ -156,6 +163,12 @@ class G1MuJoCoSession(AbstractContextManager):
         # Agent-visible step IDs count completed action chunks, not 20ms policy ticks.
         self.step_id += 1
         return self.observe()
+
+    def set_goal_marker(self, goal):
+        site = self.mj.mj_name2id(self.model, self.mj.mjtObj.mjOBJ_SITE, 'navigation_goal')
+        if site >= 0:
+            self.model.site_pos[site, :2] = [goal.x, goal.y]
+            self.mj.mj_forward(self.model, self.data)
 
     def close(self):
         if self.closed:

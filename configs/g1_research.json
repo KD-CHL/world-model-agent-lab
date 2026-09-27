@@ -1,0 +1,12 @@
+{
+  "world_model": {
+    "factory": "wmal.locomotion.learned:load",
+    "config": {"checkpoint": "runs/g1_research/model.json"}
+  },
+  "planner": {"samples": 48, "horizon": 3, "seed": 0, "action_duration_s": 0.5,
+              "max_linear_velocity": 0.35, "max_yaw_rate": 0.3},
+  "feedback": {"threshold_m": 0.08, "alpha": 0.3, "minimum_scale": 0.25},
+  "simulator": {"viewer": true, "realtime": true},
+  "agent": {"max_cycles_per_goal": 100},
+  "log_path": "runs/g1_research/interactive.jsonl"
+}

@@ -103,6 +103,8 @@ def interactive_loop(agent, session, *, input_fn=input, output_fn=print,
         if goal is None:
             break
         log('goal', {'x': goal.x, 'y': goal.y, 'yaw_rad': goal.yaw})
+        if hasattr(session, 'set_goal_marker'):
+            session.set_goal_marker(goal)
         result = agent.run_goal(goal, session, max_cycles=max_cycles)
         summary = {'status': result.status, 'cycles': result.cycles,
                    'detail': result.detail,
@@ -121,6 +123,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='Experiment JSON with world-model factory')
     parser.add_argument('--log', help='Override JSONL experiment log path')
+    parser.add_argument('--goal', help='Run one world-frame goal, e.g. "4 0", then exit')
+    parser.add_argument('--headless', action='store_true', help='Disable viewer and wall-clock pacing')
     args = parser.parse_args(argv)
     try:
         config = validate_experiment_config(json.loads(Path(args.config).read_text(encoding='utf-8')))
@@ -137,13 +141,35 @@ def main(argv=None):
             max_yaw_rate=settings.get('max_yaw_rate', 0.7),
             uncertainty_weight=settings.get('uncertainty_weight', 0.02))
         agent_config = config.get('agent', {})
+        from wmal.locomotion.feedback import ResidualFeedback
+        feedback = ResidualFeedback(**config['feedback']) if 'feedback' in config else None
         agent = G1Agent(planner, max_tilt_rad=agent_config.get('max_tilt_rad', 0.65),
                         min_pelvis_height_m=agent_config.get('min_pelvis_height_m', 0.48),
-                        log=EventLog(args.log or config.get('log_path', 'runs/g1_agent/events.jsonl')))
+                        log=EventLog(args.log or config.get('log_path', 'runs/g1_agent/events.jsonl')),
+                        feedback=feedback)
         from wmal.envs.g1_session import G1MuJoCoSession
         simulator = config.get('simulator', {})
-        with G1MuJoCoSession(viewer=simulator.get('viewer', True),
-                             realtime=simulator.get('realtime', True)) as session:
+        scene = None
+        if simulator.get('scene') == 'indoor':
+            from wmal.envs.indoor_scene import IndoorScene
+            from wmal.locomotion.navigation import NavigationPlanner
+            scene = IndoorScene()
+            agent.planner = NavigationPlanner(planner, scene, agent.log)
+        elif simulator.get('scene') is not None:
+            raise ValueError('Unknown simulator scene')
+        with G1MuJoCoSession(viewer=False if args.headless else simulator.get('viewer', True),
+                             realtime=False if args.headless else simulator.get('realtime', True), scene=scene) as session:
+            if args.goal:
+                goal = parse_goal(args.goal)
+                if goal is None:
+                    raise ValueError('--goal requires coordinates')
+                session.set_goal_marker(goal)
+                result = agent.run_goal(goal, session, max_cycles=agent_config.get('max_cycles_per_goal', 100))
+                summary = {'status': result.status, 'cycles': result.cycles, 'detail': result.detail,
+                           'final_state': result.final_state.__dict__ if result.final_state else None}
+                agent.log('goal_result', summary)
+                print(json.dumps(summary))
+                return 0 if result.status == 'succeeded' else 1
             interactive_loop(agent, session,
                              max_cycles=agent_config.get('max_cycles_per_goal', 100),
                              log_path=agent.log)

@@ -28,6 +28,19 @@ def _shape(feature, name):
     return shape
 
 
+def _vector_names(feature, dimension, name):
+    names = feature.get("names") if isinstance(feature, dict) else None
+    # LeRobot v2.1 stores vector names grouped by a single axis, e.g.
+    # [["joint_0", "joint_1"]], while some exporters use a flat list.
+    if isinstance(names, list) and len(names) == 1 and isinstance(names[0], list):
+        names = names[0]
+    if (not isinstance(names, list) or len(names) != dimension
+            or any(not isinstance(value, str) or not value for value in names)
+            or len(set(names)) != len(names)):
+        raise ValueError(f"{name} feature must declare unique ordered names")
+    return names
+
+
 def inspect_lerobot_v21(root, *, dataset_id, revision, license_id, seed=0,
                         camera_key="observation.images.top", hash_episode_files=False):
     """Validate WMA's expected V2.1 source tree and return a reproducible manifest.
@@ -61,15 +74,21 @@ def inspect_lerobot_v21(root, *, dataset_id, revision, license_id, seed=0,
         raise ValueError("State and action features must be one-dimensional vectors")
     if state_shape != action_shape:
         raise ValueError("State/action dimensions differ; an explicit adapter is required")
-    state_names = features["observation.state"].get("names")
-    action_names = features["action"].get("names")
-    if not isinstance(state_names, list) or len(state_names) != state_shape[0] or len(set(state_names)) != len(state_names):
-        raise ValueError("State feature must declare unique ordered names")
-    if not isinstance(action_names, list) or len(action_names) != action_shape[0] or len(set(action_names)) != len(action_names):
-        raise ValueError("Action feature must declare unique ordered names")
+    state_names = _vector_names(features["observation.state"], state_shape[0], "State")
+    action_names = _vector_names(features["action"], action_shape[0], "Action")
     camera = features.get(camera_key)
     camera_shape = _shape(camera, camera_key)
-    if camera.get("dtype") not in ("video", "image") or len(camera_shape) != 3 or camera_shape[-1] != 3:
+    dimensions = camera.get("names")
+    if not isinstance(dimensions, list) or len(dimensions) != 3:
+        raise ValueError("Selected camera must declare three ordered image dimensions")
+    normalized_dimensions = [str(name).lower() for name in dimensions]
+    if normalized_dimensions == ["channels", "height", "width"]:
+        channels, height, width = camera_shape
+    elif normalized_dimensions == ["height", "width", "channels"]:
+        height, width, channels = camera_shape
+    else:
+        raise ValueError("Camera dimensions must be channels/height/width or height/width/channels")
+    if camera.get("dtype") not in ("video", "image") or channels != 3:
         raise ValueError("Selected camera must be an RGB video/image feature")
 
     tasks = []
@@ -133,8 +152,7 @@ def inspect_lerobot_v21(root, *, dataset_id, revision, license_id, seed=0,
                     "tasks_sha256": sha256_file(tasks_path)},
         "robot": info.get("robot_type", info.get("robot", "unspecified")),
         "fps": float(fps),
-        "camera": {"key": camera_key, "width": camera_shape[1], "height": camera_shape[0],
-                   "channels": camera_shape[2]},
+        "camera": {"key": camera_key, "width": width, "height": height, "channels": channels},
         "state": {"key": "observation.state", "dimension": state_shape[0],
                   "order": state_names, "dtype": features["observation.state"].get("dtype")},
         "action": {"key": "action", "dimension": action_shape[0],
