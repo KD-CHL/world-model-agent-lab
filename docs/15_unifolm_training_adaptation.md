@@ -1,5 +1,7 @@
 # 基于 UnifoLM 的机器人世界模型训练与微调路线
 
+> 2026-09-28 研究方向更新：以 [预测可信度研究方案](21_research_plan_prediction_reliability.md) 和 [当前数据清单](22_world_model_dataset_catalog.md) 为准。本页保留上游工具参考；decision/joint 训练不等于 prediction-only，现有 split 清单也不代表上游训练已执行隔离。项目原始数据现存于仓库内 `data/raw/lerobot/`，受 Git 排除规则保护。
+
 调研日期：2026-09-23。本文把上游训练流程作为外部研究工作流，说明如何获取数据、组织训练、保存模型以及接回本项目。上游模型代码和权重不复制进本仓库。
 
 ## 研究目标和模型分工

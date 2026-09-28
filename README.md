@@ -4,6 +4,12 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
 
+研究主线：[预测可信度辅助机器人Agent规划与两条训练路线](docs/21_research_plan_prediction_reliability.md)；[数据集核查清单](docs/22_world_model_dataset_catalog.md)。固定技能和任务状态机，优先微调视觉动作条件预测模型，按A0—A3独立消融后再接LLM/VLM。
+
+自然语言 API 规划入口：`python scripts/g1_llm_agent.py`。环境变量配置、模型边界和通信故障处理见 [大模型与 G1 协调指南](docs/20_llm_coordination.md)。
+
+十二种桌面操作环境见 [G1 操作任务虚拟世界](docs/19_manipulation_worlds.md)。运行 `python scripts/workcell_sim.py --task stack_block` 打开积木工作台；支持双机器人和柔性毛巾场景。
+
 新增 [十项动作规划实验与模型训练优化](docs/18_ten_experiments.md)：批量运行任务、多个规划种子、阶段结果统计，以及验证集多步预测选型。
 
 室内绕障实验：`python scripts/g1_agent_sim.py --config configs/g1_indoor.json`，输入目标 `4 0`。
