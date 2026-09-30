@@ -59,9 +59,11 @@ flowchart LR
 
 ## 从采样到规划
 
-下面命令均在项目根目录运行。使用与已安装 PyTorch/MuJoCo 兼容的 Python 环境；项目已有 `learning`、`simulation`、`walking` 可选依赖。
+下面命令均在项目根目录、本项目 `wmal` 环境运行；项目已有 `learning`、`simulation`、`walking` 可选依赖。
 
 ```bash
+conda activate wmal
+export PYTHONPATH="$PWD/src"
 python -m pip install -e '.[learning,simulation,walking]'
 
 # 明确分开训练/验证/测试回合；输出存在时拒绝覆盖。
@@ -94,7 +96,9 @@ PYTHONPATH=src python scripts/g1_agent_sim.py \
   --config configs/g1_neural.json --headless --goal '0.6 0'
 ```
 
-训练过程中每轮输出 train_loss、validation_loss、best_epoch 和耗时。输出包括：
+训练默认提供 epoch、训练/验证 batch、集成成员、损失和 ETA 的终端进度条；断点续训从已完成 epoch 继续显示。
+进度输出到 stderr，每轮 stdout 的 JSON 事件仍包含 train_loss、validation_loss、best_epoch 和耗时。
+加 `--no-progress` 只关闭终端提示，不关闭 JSON 事件或训练报告。Python API 的 `progress` 回调保持兼容，另以 `show_progress=True` 启用终端显示。输出包括：
 
 - `model.pt`：验证集选出的推理权重；文件已存在时，非 resume 训练拒绝覆盖。
 - `model.latest.pt`：全部成员的最后训练状态和优化器，用于中断恢复。

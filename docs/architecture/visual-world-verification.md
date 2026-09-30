@@ -75,6 +75,16 @@
 
 `scripts/check_scaffold.py` 与 `git diff --check` 通过；Python/JSON/XML 检查不能替代 ROS2 或 GUI 验证。
 
+## 数据来源说明与训练进度复验
+
+当前窗口权重的训练源为 `mujoco_g1_arm_servo`，读取 40 条仿真轨迹、640 次转移；基模 30 epoch，冻结编码器实验 2 epoch 使用同一份仿真数据。开源数据并非缺失：本机 MountCamera 原始数据 201 个 parquet episode，约 5.5GB；独立离线模型读取的导入子集为 20 条 ×32 帧、620 次转移。这两种模型分别为 2D 增量接口和 16D 操作接口，不能互换。训练报告记录实际来源，不能用场景里的参考数据集 URL 代替它。
+
+进度条实现后的完整 `wmal` 测试：**124 项、123 通过、1 ROS2 通信测试跳过**。新增 7 项验证 stderr 进度/纯 JSON stdout、关闭显示的模型版本不变、微调使用相同进度、批次失败不伪报 epoch 完成、缺少数据不产出权重、旧字符串来源清单继续可训练，以及导航网络 resume 与连续训练一致。代码审查指出的来源类型兼容问题已用实际训练先复现再修复，不收紧原有数据 schema。非 TTY 输出不含 cursor-up ANSI，窄终端保留完整每轮损失摘要。
+
+真实开源子集 CUDA 进度冒烟：`runs/lerobot_progress_smoke_20260930/` 训练 2 epoch，验证损失 0.033017；从该权重冻结编码器训练 1 epoch 输出 `runs/lerobot_progress_finetune_20260930/`，验证损失 0.0292946。逐张量确认编码器未变、父模型/数据记录保留。这些短训仅验证进度与训练链，不作为算法增益证据，也不连接到两关节控制器。旧模型/数据未覆盖，新产物仍被 Git 排除。
+
+`pip check`、脚手架检查、`git diff --check` 通过；本轮只在 `wmal` 更新项目安装元数据，未替换 PyTorch/CUDA 或增加其他环境。
+
 ## 论文前仍需补齐
 
 1. 独立 final-test 与多个训练 seed；不能用本记录单目标判断算法优势。

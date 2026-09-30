@@ -64,6 +64,21 @@ python scripts/g1_agent_sim.py --config configs/g1_research.json
 
 ## 当前可以执行
 
+## 当前模型的数据来源
+
+模型不是在无数据情况下生成的。当前 MuJoCo 窗口加载的视觉模型使用本机采集的仿真数据：
+`data/processed/visual_g1_20260930/manifest.json`，40 条轨迹、640 次动作转移，包含 RGB、两关节目标增量和执行后的实测状态。
+24/4/8/4 条分别用于训练/验证/校准/测试；基模随机初始化训练 30 轮，再用同一仿真数据冻结编码器训练 2 轮。
+这次“微调”是工程实验，不是用新增开源数据对 UniFoLM 预训练权重调优，也不代表已学会抓取或堆叠。
+
+另一条独立离线路线使用已下载的 `G1_Dex1_MountCameraRedGripper_Dataset`：原始数据在
+`data/raw/lerobot/unitree_g1_pack_camera/`，已转换子集在 `data/processed/lerobot_visual_av1_20260930/`。
+该子集为 20 条轨迹、每条 32 帧（620 次转移），曾单独训练 3 轮；其 16 维动作模型不能直接替换窗口中的 2 维增量模型。
+数据和权重由 gitignore 排除，所以远程仓库只看得到来源清单，下载代码不会自动获得这些大文件。
+完整数据来源、采集/导入及训练命令见 [视觉训练指南](docs/23_visual_world_training_and_agent.md)。
+
+`scripts/visual_world.py train`（含 `--pretrained` 微调）和 `scripts/train_motion_network.py train` 默认显示轮次、训练/验证批次、集成成员、损失、耗时及 ETA。增加 `--no-progress` 可关闭提示；进度写 stderr，不改变 stdout 的 JSON、训练算法或 checkpoint 格式。所有命令只使用 `wmal`。
+
 ## Conda 环境安装与启动
 
 项目提供了 [environment.yml](environment.yml)，用于创建独立的 `wmal` 环境。

@@ -25,6 +25,43 @@ python -m pip check
 
 普通训练/仿真启动时，将 PYTHONPATH 设置为本项目 `src`，不要追加 shell 自动加入的 ROS Python 路径或其他项目环境。系统 ROS 的 Python 3.12 包与 `wmal` 的 Python 3.10 ABI 不兼容；ROS 接入仍需单独验证。原始数据和 `runs/` 已在 gitignore 排除，本轮生成数据放 `data/processed/`，权重、校准、日志放 `runs/`，未提交大型文件。
 
+## 已有模型到底用什么训练
+
+不是空数据训练。窗口当前加载的 `visual_g1_release_finetuned_20260930` 使用
+`data/processed/visual_g1_20260930/manifest.json`：采集器在 MuJoCo 中发出受限关节动作，再记录动作前后的 RGB 和状态。
+40 条轨迹每条 16 次动作，共 640 次转移；训练/验证/校准/测试为 24/4/8/4 条。
+训练样本是 `(当前图像、当前状态、候选动作段) → (实际未来图像、实际未来状态)`，目标来自仿真执行，不是模型自己的预测。
+基模是本项目 CNN/GRU 小网络随机初始化训练 30 轮，随后同一份仿真数据做冻结编码器的 2 轮实验。
+这不是 UniFoLM 预训练模型的开源数据微调，不能据此宣称已经学会堆叠；场景元数据中的 G1_Stack_Block 链接只是建模参考，不是该模型实际读取的下载数据。
+
+独立的 `runs/lerobot_visual_20260930/` 则使用已下载的 G1 MountCamera 数据，经 AV1/parquet 对齐导入：
+`data/processed/lerobot_visual_av1_20260930/manifest.json`，20 条 ×32 帧，620 次转移，曾训练 3 轮。
+它有 16 维操作动作，只完成离线训练链测试，未接到两关节仿真控制器。
+训练报告 `training_report.json` 的 `metadata.training_source`、episode ID、内容哈希和父模型版本可核查来源。
+原始视频、NPZ 和权重都不在 Git 中；缺少 manifest/数据文件会明确失败，不会凭空生成训练样本或可用权重。
+
+## 训练进度条
+
+视觉训练和 `--pretrained` 微调共享进度条，导航状态网络 `train_motion_network.py train` 也使用相同显示：
+
+- 开始时打印实际数据文件、来源类型、训练/验证 episode 与窗口数量、设备。
+- `Visual epochs` / `Fine-tune epochs` / `Motion epochs` 显示完成轮数、百分比、耗时和 ETA。
+- `Train i/N` / `Validation i/N` 显示实际批次数、集成成员和当前累计平均损失；每轮摘要完整显示 train_loss、val_loss、best，窄终端也不会丢失这些指标。
+- 一个 epoch 只有在训练、验证和该轮权重/历史保存完成后才增加；中断或失败会关闭显示，不把未完成轮次报成完成。
+- 进度写 stderr；最终 JSON/原有 JSONL 事件仍写 stdout，磁盘指标不变。训练器 Python API 默认安静，CLI 默认开启。
+
+批量运行加 `--no-progress` 可关闭所有训练提示，不改变模型结果。ETA 是已完成训练速度的估计，开始时为 `?`；首次数据哈希校验/加载在正式进度条之前，并有单独状态提示。
+进度依赖 `tqdm` 已加入本项目 `learning` / `visual-world` extra，不需要其他环境。该改动不接管上游 UniFoLM 自己的训练循环，也未给旧的其他训练入口添加进度条。
+
+本机已导入的数据可直接启动（输出目录必须新建/为空）：
+
+```bash
+python scripts/visual_world.py train \
+  --manifest data/processed/lerobot_visual_av1_20260930/manifest.json \
+  --output runs/lerobot_with_progress_run1 --device cuda --epochs 30
+# 同样的命令加 --no-progress 可关闭提示。
+```
+
 ## 路线 A：真实 MuJoCo 图像学习与可执行闭环
 
 下列目录应当不存在或为空，入口会拒绝覆盖已有实验。示例是新的 run 名，不覆盖本轮记录。

@@ -10,6 +10,7 @@ from wmal.logging.manifest import atomic_json, build_manifest, sha256_file
 from wmal.models.motion_network import (SCHEMA, LATENT_SCHEMA, STATE_SCALES, MotionNetwork, atomic_torch_save,
     build_network, content_version, cpu_states, features, integrate, state_vector, target_outputs)
 from wmal.models.neural_dynamics import _torch_modules
+from wmal.training.progress import progress_bar, training_status, epoch_status
 
 
 @dataclass(frozen=True)
@@ -106,25 +107,31 @@ def sequence_loss(model, before, actions, after, stats, rollout_weight, latent_w
     return one_step+rollout_weight*rollout+latent_weight*auxiliary, one_step, rollout
 
 
-def validation_loss(models, arrays, stats, config):
+def validation_loss(models, arrays, stats, config, *, batch_progress=None):
     torch, _ = _torch_modules()
-    total = 0.
+    total, count = 0., 0
     with torch.inference_mode():
-        for model in models:
+        for member,model in enumerate(models):
             model.eval()
             for start in range(0,len(arrays[0]),config.batch_size):
                 batch = tuple(a[start:start+config.batch_size] for a in arrays)
                 loss, _, _ = sequence_loss(model,*batch,stats,config.rollout_weight,config.latent_weight,config.horizon_decay)
                 total += float(loss)*len(batch[0])
+                count += len(batch[0])
+                if batch_progress is not None:
+                    batch_progress.set_postfix(member=f'{member+1}/{len(models)}',
+                                               loss=f'{total/count:.4g}',refresh=False)
+                    batch_progress.update()
     return total/(len(models)*len(arrays[0]))
 
 
-def train_motion(dataset, checkpoint, config=None, *, resume=None, progress=None):
+def train_motion(dataset, checkpoint, config=None, *, resume=None, progress=None, show_progress=False):
     torch, _ = _torch_modules()
     config = config or TrainingConfig()
     if Path(dataset).resolve() == Path(checkpoint).resolve() or Path(checkpoint).suffix != '.pt':
         raise ValueError('Checkpoint must be a separate .pt file')
     torch.set_num_threads(config.threads)
+    training_status(f'Loading motion dataset: {Path(dataset).resolve()}',enabled=show_progress)
     splits, duration = load_motion_episodes(dataset)
     if any(not episodes for episodes in splits.values()):
         raise ValueError('Training requires disjoint train, validation and reserved test episodes')
@@ -136,6 +143,9 @@ def train_motion(dataset, checkpoint, config=None, *, resume=None, progress=None
         train_windows.extend(windows)
     arrays = tensors(train_windows,config.device)
     valid_arrays = tensors([window for windows in validation.values() for window in windows],config.device)
+    training_status(f'train_episodes={len(splits["train"])} train_windows={len(train_windows)} '
+                    f'validation_episodes={len(splits["validation"])} validation_windows={len(valid_arrays[0])} '
+                    f'device={config.device}',enabled=show_progress)
     norm = normalization(splits['train'],config.architecture)
     stats = {key:torch.tensor(values,dtype=torch.float32,device=config.device) for key,values in norm.items()}
     params = asdict(config)
@@ -181,38 +191,52 @@ def train_motion(dataset, checkpoint, config=None, *, resume=None, progress=None
         raise ValueError('Total epochs must exceed resumed epoch')
     emit = progress or (lambda item:None)
     started = time.perf_counter()
-    for epoch in range(start_epoch,config.epochs):
-        training_total, count = 0., 0
-        for member, (model,optimizer,indices) in enumerate(zip(models,optimizers,samples)):
-            model.train()
-            generator = torch.Generator().manual_seed(config.seed+epoch*100003+member*101)
-            order = torch.randperm(len(indices),generator=generator).tolist()
-            for start in range(0,len(order),config.batch_size):
-                selected = torch.tensor([indices[i] for i in order[start:start+config.batch_size]],device=config.device)
-                batch = tuple(a[selected] for a in arrays)
-                loss, _, _ = sequence_loss(model,*batch,stats,config.rollout_weight,config.latent_weight,config.horizon_decay)
-                if not torch.isfinite(loss):
-                    raise ValueError('Nonfinite training loss')
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(),10.,error_if_nonfinite=True)
-                optimizer.step()
-                training_total += float(loss.detach())*len(selected)
-                count += len(selected)
-        valid_loss = validation_loss(models,valid_arrays,stats,config)
-        if not math.isfinite(valid_loss):
-            raise ValueError('Nonfinite validation loss')
-        if valid_loss < best_loss:
-            best_loss, best_epoch, best_states = valid_loss, epoch, cpu_states(models)
-        row = {'epoch':epoch,'train_loss':training_total/count,'validation_loss':valid_loss,
-               'best_epoch':best_epoch,'elapsed_s':time.perf_counter()-started}
-        history.append(row)
-        snapshot = {'schema':'wmal.motion_training.v1','config':params,'dataset_sha256':dataset_hash,
-                    'normalization':norm,'epoch':epoch,'state_dicts':cpu_states(models),
-                    'optimizers':[optimizer.state_dict() for optimizer in optimizers],
-                    'best_epoch':best_epoch,'best_loss':best_loss,'best_states':best_states,'history':history}
-        atomic_torch_save(latest_path,snapshot)
-        emit(row)
+    train_batches=sum(math.ceil(len(indices)/config.batch_size) for indices in samples)
+    valid_batches=len(models)*math.ceil(len(valid_arrays[0])/config.batch_size)
+    with progress_bar(config.epochs,'Motion epochs',enabled=show_progress,unit='epoch',
+                      initial=start_epoch) as epochs:
+        for epoch in range(start_epoch,config.epochs):
+            training_total, count = 0., 0
+            with progress_bar(train_batches,f'Train {epoch+1}/{config.epochs}',enabled=show_progress,
+                              position=1,leave=False) as batches:
+                for member, (model,optimizer,indices) in enumerate(zip(models,optimizers,samples)):
+                    model.train()
+                    generator = torch.Generator().manual_seed(config.seed+epoch*100003+member*101)
+                    order = torch.randperm(len(indices),generator=generator).tolist()
+                    for start in range(0,len(order),config.batch_size):
+                        selected = torch.tensor([indices[i] for i in order[start:start+config.batch_size]],device=config.device)
+                        batch = tuple(a[selected] for a in arrays)
+                        loss, _, _ = sequence_loss(model,*batch,stats,config.rollout_weight,config.latent_weight,config.horizon_decay)
+                        if not torch.isfinite(loss):
+                            raise ValueError('Nonfinite training loss')
+                        optimizer.zero_grad(set_to_none=True)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(),10.,error_if_nonfinite=True)
+                        optimizer.step()
+                        training_total += float(loss.detach())*len(selected)
+                        count += len(selected)
+                        batches.set_postfix(member=f'{member+1}/{len(models)}',
+                                            loss=f'{training_total/count:.4g}',refresh=False)
+                        batches.update()
+            with progress_bar(valid_batches,f'Validation {epoch+1}/{config.epochs}',enabled=show_progress,
+                              position=1,leave=False) as batches:
+                valid_loss = validation_loss(models,valid_arrays,stats,config,batch_progress=batches)
+            if not math.isfinite(valid_loss):
+                raise ValueError('Nonfinite validation loss')
+            if valid_loss < best_loss:
+                best_loss, best_epoch, best_states = valid_loss, epoch, cpu_states(models)
+            row = {'epoch':epoch,'train_loss':training_total/count,'validation_loss':valid_loss,
+                   'best_epoch':best_epoch,'elapsed_s':time.perf_counter()-started}
+            history.append(row)
+            snapshot = {'schema':'wmal.motion_training.v1','config':params,'dataset_sha256':dataset_hash,
+                        'normalization':norm,'epoch':epoch,'state_dicts':cpu_states(models),
+                        'optimizers':[optimizer.state_dict() for optimizer in optimizers],
+                        'best_epoch':best_epoch,'best_loss':best_loss,'best_states':best_states,'history':history}
+            atomic_torch_save(latest_path,snapshot)
+            emit(row)
+            epochs.set_postfix(train=f'{row["train_loss"]:.4g}',val=f'{valid_loss:.4g}',refresh=False)
+            epochs.update()
+            epoch_status(epoch+1,config.epochs,row['train_loss'],valid_loss,best_loss,enabled=show_progress)
     metadata = {'dataset_sha256':dataset_hash,'config':params,'best_epoch':best_epoch,
                 'training_episodes':list(splits['train']), 'validation_episodes':list(splits['validation']),
                 'reserved_test_episodes':list(splits['test']),

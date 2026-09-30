@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Subset
 from wmal.datasets.visual_sequences import VisualDataset, read_episode_lineage, assert_unexposed_episodes
 from wmal.logging.manifest import atomic_json, sha256_file
 from wmal.models.visual_latent import NetworkConfig, VisualLatentMember, VisualWorldModel
+from wmal.training.progress import progress_bar, training_status, epoch_status
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,8 @@ def batch_loss(member, batch, normalization, config):
                   'latent':float(latent.detach()),'event':float(event.detach())}
 
 
-def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrained=None, freeze_encoder=False):
+def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrained=None, freeze_encoder=False,
+                 show_progress=False):
     output=Path(output_dir).resolve()
     if output.exists() and any(output.iterdir()):
         raise ValueError('Training output is nonempty; use a new directory')
@@ -78,8 +80,16 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     torch.manual_seed(config.seed)
     if config.device.startswith('cuda') and not torch.cuda.is_available():
         raise ValueError('CUDA requested but unavailable')
+    training_status(f'Checking training/validation dataset hashes: {Path(manifest).resolve()}',enabled=show_progress)
     train=VisualDataset(manifest,'train',horizon=config.horizon)
     validation=VisualDataset(manifest,'validation',horizon=config.horizon)
+    source=train.manifest['source']
+    source_kind=source.get('kind','unknown') if isinstance(source,dict) else (
+        source if isinstance(source,str) else 'unknown')
+    training_status(f'source={source_kind} '
+                    f'train_episodes={len(train.rows)} train_windows={len(train)} '
+                    f'validation_episodes={len(validation.rows)} validation_windows={len(validation)} '
+                    f'device={config.device}',enabled=show_progress)
     semantics=train.semantics
     network=NetworkConfig(len(semantics['state_order']),len(semantics['action_order']),
                           image_size=semantics['image_size'],latent_dim=config.latent_dim,
@@ -128,43 +138,57 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
               'parent_model_version':parent_version,'episode_lineage':lineage,'freeze_encoder':freeze_encoder,
               'event_supervision':bool(network.event_dim),'config':asdict(config)}
     history,best,started=[],float('inf'),time.perf_counter()
-    for epoch in range(config.epochs):
-        train_total,train_count=0.,0
-        for member,optimizer,loader in zip(members,optimizers,loaders):
-            member.train()
-            for batch in loader:
-                optimizer.zero_grad(set_to_none=True)
-                loss,_=batch_loss(member,batch,normalization,config)
-                if not torch.isfinite(loss):
-                    raise RuntimeError('Nonfinite training loss; checkpoint not overwritten')
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(member.parameters(),config.gradient_clip,error_if_nonfinite=True)
-                optimizer.step()
-                size=len(batch['rgb'])
-                train_total+=float(loss.detach())*size
-                train_count+=size
-        val_total,val_count=0.,0
-        components={'frame':0.,'state':0.,'latent':0.,'event':0.}
-        with torch.inference_mode():
-            for member in members:
-                member.eval()
-                for batch in val_loader:
-                    loss,parts=batch_loss(member,batch,normalization,config)
-                    size=len(batch['rgb'])
-                    val_total+=float(loss)*size
-                    val_count+=size
-                    for key,value in parts.items():
-                        components[key]+=value*size
-        val_loss=val_total/val_count
-        row={'epoch':epoch+1,'training_loss':train_total/train_count,'validation_loss':val_loss,
-             'validation_components':{key:value/val_count for key,value in components.items()}}
-        history.append(row)
-        model=VisualWorldModel(network,semantics,normalization,members,device=config.device,metadata=metadata)
-        if val_loss<best:
-            best=val_loss
-            model.save(output/'best.pt')
-        model.save(output/'last.pt')
-        atomic_json(output/'history.json',history)
+    label='Fine-tune epochs' if pretrained is not None else 'Visual epochs'
+    with progress_bar(config.epochs,label,enabled=show_progress,unit='epoch') as epochs:
+        for epoch in range(config.epochs):
+            train_total,train_count=0.,0
+            with progress_bar(sum(len(loader) for loader in loaders),f'Train {epoch+1}/{config.epochs}',
+                              enabled=show_progress,position=1,leave=False) as batches:
+                for index,(member,optimizer,loader) in enumerate(zip(members,optimizers,loaders)):
+                    member.train()
+                    for batch in loader:
+                        optimizer.zero_grad(set_to_none=True)
+                        loss,_=batch_loss(member,batch,normalization,config)
+                        if not torch.isfinite(loss):
+                            raise RuntimeError('Nonfinite training loss; checkpoint not overwritten')
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(member.parameters(),config.gradient_clip,error_if_nonfinite=True)
+                        optimizer.step()
+                        size=len(batch['rgb'])
+                        train_total+=float(loss.detach())*size
+                        train_count+=size
+                        batches.set_postfix(member=f'{index+1}/{len(members)}',
+                                            loss=f'{train_total/train_count:.4g}',refresh=False)
+                        batches.update()
+            val_total,val_count=0.,0
+            components={'frame':0.,'state':0.,'latent':0.,'event':0.}
+            with progress_bar(len(members)*len(val_loader),f'Validation {epoch+1}/{config.epochs}',
+                              enabled=show_progress,position=1,leave=False) as batches, torch.inference_mode():
+                for index,member in enumerate(members):
+                    member.eval()
+                    for batch in val_loader:
+                        loss,parts=batch_loss(member,batch,normalization,config)
+                        size=len(batch['rgb'])
+                        val_total+=float(loss)*size
+                        val_count+=size
+                        for key,value in parts.items():
+                            components[key]+=value*size
+                        batches.set_postfix(member=f'{index+1}/{len(members)}',
+                                            loss=f'{val_total/val_count:.4g}',refresh=False)
+                        batches.update()
+            val_loss=val_total/val_count
+            row={'epoch':epoch+1,'training_loss':train_total/train_count,'validation_loss':val_loss,
+                 'validation_components':{key:value/val_count for key,value in components.items()}}
+            history.append(row)
+            model=VisualWorldModel(network,semantics,normalization,members,device=config.device,metadata=metadata)
+            if val_loss<best:
+                best=val_loss
+                model.save(output/'best.pt')
+            model.save(output/'last.pt')
+            atomic_json(output/'history.json',history)
+            epochs.set_postfix(train=f'{row["training_loss"]:.4g}',val=f'{val_loss:.4g}',refresh=False)
+            epochs.update()
+            epoch_status(epoch+1,config.epochs,row['training_loss'],val_loss,best,enabled=show_progress)
     selected=VisualWorldModel.load(output/'best.pt')
     report={'schema':'wmal.visual_training_report.v1','model_version':selected.version,
             'best_validation_loss':best,'history':history,'elapsed_s':time.perf_counter()-started,

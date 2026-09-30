@@ -32,6 +32,7 @@ def main(argv=None):
     train.add_argument('--freeze-encoder',action='store_true')
     train.add_argument('--device')
     train.add_argument('--epochs',type=int)
+    train.add_argument('--no-progress',action='store_true',help='Disable terminal progress; JSON/report output remains')
     for name in ('calibrate','evaluate'):
         command=sub.add_parser(name)
         command.add_argument('--manifest',required=True)
@@ -64,7 +65,8 @@ def main(argv=None):
             if getattr(args,key) is not None:
                 values[key]=getattr(args,key)
         report=train_visual(args.manifest,args.output,VisualTrainingConfig(**values),
-                            pretrained=args.pretrained,freeze_encoder=args.freeze_encoder)
+                            pretrained=args.pretrained,freeze_encoder=args.freeze_encoder,
+                            show_progress=not args.no_progress)
         result={key:report[key] for key in ('checkpoint','model_version','best_validation_loss','elapsed_s')}
     elif args.command=='calibrate':
         from wmal.models.horizon_calibration import calibrate_visual

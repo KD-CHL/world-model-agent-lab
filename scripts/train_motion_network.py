@@ -28,6 +28,7 @@ def main(argv=None):
     train.add_argument('--resume')
     train.add_argument('--epochs',type=int,help='Total epochs, including already completed epochs')
     train.add_argument('--device')
+    train.add_argument('--no-progress',action='store_true',help='Disable terminal bars; keep JSON training events')
     evaluate = sub.add_parser('evaluate')
     evaluate.add_argument('--dataset',required=True)
     evaluate.add_argument('--checkpoint',required=True)
@@ -56,6 +57,7 @@ def main(argv=None):
         if args.epochs is not None: config['epochs'] = args.epochs
         if args.device is not None: config['device'] = args.device
         report = train_motion(args.dataset,args.checkpoint,TrainingConfig(**config),resume=args.resume,
+                              show_progress=not args.no_progress,
                               progress=lambda row:print(json.dumps({'phase':'training',**row}),flush=True))
         print(json.dumps({key:report[key] for key in ('model_version','checkpoint','best_epoch','best_validation_loss')}))
     else:
