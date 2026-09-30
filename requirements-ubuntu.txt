@@ -1,3 +1,4 @@
 # Install ROS 2 Jazzy/rclpy and colcon from official Ubuntu ROS repositories.
-# Then install the project in a system-site-packages venv with: pip install -e '.[simulation]'
-# Pin model-training framework against the selected Ubuntu/GPU driver separately.
+# Run all project Python commands in the project's Conda environment: wmal.
+# Create/update it with environment.yml; no separate project venv is required.
+# ROS 2 system middleware is external; its actual Conda/Python integration still needs verification.

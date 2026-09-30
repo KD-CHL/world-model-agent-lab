@@ -46,7 +46,7 @@
 ```bash
 cd /home/chl/GitHub/CodeSpace/world-model-agent-lab-main
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 
 # 使用已采集的数据训练优化版本，保留原模型
 python scripts/g1_research.py train --optimize --checkpoint runs/g1_research/optimized.json

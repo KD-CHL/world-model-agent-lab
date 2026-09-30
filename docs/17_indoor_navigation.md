@@ -19,7 +19,7 @@ MuJoCo 每个低层控制周期检查实际底座是否进入障碍预留间距�
 ```bash
 cd /home/chl/GitHub/CodeSpace/world-model-agent-lab-main
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 python scripts/g1_agent_sim.py --config configs/g1_indoor.json
 ```
 

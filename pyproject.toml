@@ -13,12 +13,15 @@ dependencies = []
 simulation = ["mujoco>=3.2,<4", "numpy>=1.26,<3"]
 walking = ["onnxruntime>=1.18,<2"]
 learning = ["numpy>=1.26,<3", "torch>=2.2"]
+visual-world = ["numpy>=1.26,<3", "torch>=2.2", "Pillow>=10"]
+visual-data = ["pyarrow>=15", "av>=12"]
 robot-data = ["huggingface_hub>=0.24", "PyYAML>=6"]
 
 [project.scripts]
 wmal-agent = "wmal.agents.cli:run_agent"
 wmal-serve = "wmal.agents.cli:serve"
 wmal-train-neural = "wmal.training.cli:train_neural_cli"
+wmal-visual-world = "wmal.training.visual_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

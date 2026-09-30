@@ -25,7 +25,7 @@
 ```bash
 cd /home/chl/GitHub/CodeSpace/world-model-agent-lab-main
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 export LLM_BASE_URL='https://你的服务域名/v1'
 export LLM_MODEL='你的模型名称'
 export LLM_TIMEOUT_S=30

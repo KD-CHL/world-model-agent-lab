@@ -36,7 +36,7 @@ MuJoCo + 已训练低层行走策略 → 状态/速度指令/下一状态 → ep
 
 ```bash
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 
 # 采集；每个 episode 重新初始化机器人
 python scripts/g1_research.py collect --episodes 12 --steps 30 --seed 0

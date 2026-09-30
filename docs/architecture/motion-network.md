@@ -149,4 +149,4 @@ PYTHONPATH=src python scripts/g1_agent_sim.py \
 
 神经网络专项测试覆盖学习下降、保存加载一致性、多步梯度、连续/恢复训练一致性、测试集不影响训练、数据泄漏/重复/断序检查。当前小样本和单一导航目标仅证明训练至规划的工程链路，不能支持优于回归基线、跨机器人泛化或论文性能增益的结论。采样动作分布与规划器搜索分布也需对齐后再进行正式比较。
 
-最终回归：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v` 共 91 项，90 项通过，1 项 ROS2 实际通信测试因缺少本地 ROS2 环境跳过；`git diff --check` 通过。
+历史回归记录：当时共 91 项，90 项通过，1 项 ROS2 实际通信测试因缺少本地 ROS2 环境跳过；`git diff --check` 通过。当前统一在 `conda activate wmal` 后执行 `PYTHONPATH=src python -m unittest discover -s tests -v`；最新结果以视觉网络验收文档的统一环境复验为准。

@@ -73,13 +73,13 @@ G1 固定底座关节控制/渲染和浮基策略回放均在本地 `wmal` Conda
 
 ## Ubuntu 24.04 / ROS 2 Jazzy 安装与启动
 
-在目标系统按 ROS 官方文档安装 ros-base、colcon 和接口生成工具。ROS Python 绑定需对运行环境可见；在 source `/opt/ros/jazzy/setup.bash` 后，用系统 Python 建立 `--system-site-packages` 虚拟环境，再安装项目。训练用深度学习框架另行按 GPU 驱动选取和锁定。
+在目标系统按 ROS 官方文档安装 ros-base、colcon 和接口生成工具。项目 Python 入口统一使用 `wmal`，不再建立额外 venv。**先验证 ROS Python ABI 是否兼容**：Ubuntu 24.04 的系统 ROS Jazzy 绑定通常针对系统 Python 3.12，而当前 `wmal` 为 Python 3.10；只 source ROS 或追加 PYTHONPATH 不能修复二进制 ABI 差异。必须先提供与 `wmal` Python 匹配的 ROS 绑定/接口构建；本机这部分尚未验收，不能把下面命令当作已验证的 ROS 安装方案。本地非 ROS MuJoCo 闭环不依赖该步骤。
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-python3 -m venv --system-site-packages .venv
-source .venv/bin/activate
-python -m pip install -e '.[simulation]'
+conda activate wmal
+# 仅在 ROS Python 绑定与当前解释器 ABI 匹配后继续。
+python -c "import sys,rclpy; print(sys.executable); print(rclpy.__file__)"
 cd ros2
 colcon build --base-paths wmal_interfaces
 source install/setup.bash
@@ -90,15 +90,18 @@ cd ..
 
 ```bash
 # 终端 A：单关节探针，只验证 ROS 与 MuJoCo 接口
-source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+source /opt/ros/jazzy/setup.bash
+conda activate wmal
 PYTHONPATH=src python scripts/serve_ros2.py robot --config configs/robots/interface_probe.json
 
 # 终端 B：加载本项目训练的探针模型；实际任务可用 --plugin 接入其他规划器
-source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+source /opt/ros/jazzy/setup.bash
+conda activate wmal
 PYTHONPATH=src python scripts/serve_ros2.py planner --checkpoint runs/probe/model.json
 
 # 终端 C：大模型 API Agent
-source /opt/ros/jazzy/setup.bash && source .venv/bin/activate
+source /opt/ros/jazzy/setup.bash
+conda activate wmal
 export LLM_BASE_URL='https://provider.example/v1'
 export LLM_MODEL='your-model'
 read -s LLM_API_KEY && export LLM_API_KEY

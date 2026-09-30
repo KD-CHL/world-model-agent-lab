@@ -4,6 +4,8 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
 
+新增可训练的 **RGB 动作条件视觉世界模型与可信度辅助技能 Agent**：支持真实 MuJoCo 图像采集、LeRobot AV1/parquet 对齐导入、CNN/GRU 多步集成训练、冻结编码器微调、独立 episode 校准、A0–A3 和保持打开的交互窗口。见 [架构与论文假设](docs/architecture/visual-world-agent.md)、[完整命令与输出位置](docs/23_visual_world_training_and_agent.md)、[实际验收与局限](docs/architecture/visual-world-verification.md)。当前闭环验证是 G1 两关节到达目标，不宣称操作任务/UniFoLM 大模型微调已完成。
+
 研究主线：[预测可信度辅助机器人Agent规划与两条训练路线](docs/21_research_plan_prediction_reliability.md)；[数据集核查清单](docs/22_world_model_dataset_catalog.md)。固定技能和任务状态机，当前先验证状态规划网络的训练闭环；视觉动作条件模型保留为独立支线，两条路线均需独立消融。
 
 规划世界模型训练网络：[神经动力学集成的结构、采样、训练、续训和规划接入](docs/architecture/motion-network.md)。入口 `scripts/train_motion_network.py`，支持 `collect`、`train`、`evaluate`；G1 接入配置为 `configs/g1_neural.json`。
@@ -24,7 +26,7 @@ Agent 架构优化：共享技能生命周期、G1 有预算的任务重规划�
 
 ```bash
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 python scripts/g1_research.py collect --episodes 12 --steps 30
 python scripts/g1_research.py train
 python scripts/g1_research.py evaluate --feedback --steps 100
@@ -65,41 +67,51 @@ python scripts/g1_agent_sim.py --config configs/g1_research.json
 ## Conda 环境安装与启动
 
 项目提供了 [environment.yml](environment.yml)，用于创建独立的 `wmal` 环境。
-该环境包含 Python 3.10、MuJoCo、NumPy 和本项目的可编辑安装。PyTorch 为可选训练依赖，
-按机器的 CPU/GPU 环境单独安装。
+采集、数据导入、训练、微调、推理和 MuJoCo 仿真统一使用本项目的 `wmal` 环境，
+不借用其他项目的 Conda 环境，也不把其他环境的 site-packages 加入 PYTHONPATH。
+环境配置包含 Python 3.10、MuJoCo、NumPy、ONNX Runtime、PyTorch CUDA 12.8、
+PyArrow、PyAV、Pillow、YAML/Hugging Face 工具和本项目的可编辑安装。
+当前 GPU 配置固定 `torch==2.11.0+cu128`，适配本机 RTX 5060 Ti；其他硬件需单独调整构建。
 
 首次安装：
 
 ```bash
 conda env create -f environment.yml
 conda activate wmal
+export PYTHONPATH="$PWD/src"
 ```
 
-如需训练神经世界模型：
+已有环境补齐训练和数据依赖：
 
 ```bash
 conda activate wmal
-python -m pip install '.[learning]'
+export PYTHONPATH="$PWD/src"
+python -m pip install 'torch==2.11.0+cu128' --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -e '.[simulation,walking,visual-world,visual-data,robot-data]'
 ```
 
 如果环境已经存在，可同步依赖：
 
 ```bash
-conda env update -f environment.yml --prune
+conda env update -n wmal -f environment.yml
 conda activate wmal
+export PYTHONPATH="$PWD/src"
 ```
 
-验证 Python、MuJoCo 和项目导入：
+验证 Python、GPU、MuJoCo 与数据工具：
 
 ```bash
 conda activate wmal
-python -c "import sys, mujoco, wmal; print(sys.executable); print('MuJoCo', mujoco.__version__)"
+export PYTHONPATH="$PWD/src"
+python -c "import sys,torch,mujoco,pyarrow,av,wmal; print(sys.executable); print('Torch',torch.__version__,'CUDA',torch.cuda.is_available()); print('MuJoCo',mujoco.__version__,'PyArrow',pyarrow.__version__,'PyAV',av.__version__)"
+python -m pip check
 ```
 
 运行完整测试：
 
 ```bash
 conda activate wmal
+export PYTHONPATH="$PWD/src"
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
@@ -117,8 +129,7 @@ PYTHONPATH=src python scripts/train.py
 
 交互窗口中，按 `N` / `P` 选择下一个/上一个关节，按 `[` / `]` 将当前关节目标减少/增加 `0.1 rad`，按 `0` 将目标设为当前关节位置。目标会按配置的关节速度上限平滑执行；默认相机可用鼠标旋转，若需锁定相机可加 `--camera pack_camera`。
 
-ROS 2 仍需在 Ubuntu 24.04 上单独安装 Jazzy；安装后先执行
-`source /opt/ros/jazzy/setup.bash`，再使用本 Conda 环境启动 ROS 2 节点。
+ROS 2 中间件仍需在 Ubuntu 24.04 上单独安装 Jazzy。其系统 Python 3.12 绑定不能直接用于本项目 Python 3.10 环境；需先完成匹配绑定的构建与通信验证，不能仅靠 `source /opt/ros/jazzy/setup.bash` 混入系统包。直接 MuJoCo 训练和仿真不需要 ROS。
 
 Agent 请求 HTTP API，将受限目标交给 ROS 2 世界模型规划服务，再以 ROS 2 action 执行第一步并读取新观测。安装及三终端启动命令见 [启动指南](docs/09_agent_ros2_design.md)。
 

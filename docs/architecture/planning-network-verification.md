@@ -4,7 +4,7 @@
 
 ## 自动检查
 
-- 全套：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`，99 项，98 通过、1 跳过、0 失败。
+- 历史全套：当时 99 项，98 通过、1 跳过、0 失败。当前统一在 `conda activate wmal` 后使用 `PYTHONPATH=src python -m unittest discover -s tests -v`，最新复验结果以视觉网络验收文档为准。
 - 唯一跳过为 ROS 2 实际中间件测试，本机没有 rclpy；不能据此宣称 Ubuntu ROS 2 端到端已通过。
 - 8 项新测试覆盖位移与末端速度分离、潜在网络学习/保存/加载、恢复训练、测试数据隔离、成员独立轨迹、逐成员与平均路径约束、批量返回回合一致性、语言恢复证据及数据导出。
 - 平均路径障碍问题经历了先失败后修复的回归验收：成员路径在障碍两侧不代表其平均路径无障碍，现同时检查二者。
@@ -60,7 +60,8 @@
 真实 G1 MuJoCo 闭环再次运行：
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/g1_agent_sim.py --config runs/planning_network_smoke/agent_config.json --headless --goal '0.6 0' --log runs/planning_network_smoke/closed_loop_verified.jsonl
+conda activate wmal
+PYTHONPATH=src python scripts/g1_agent_sim.py --config runs/planning_network_smoke/agent_config.json --headless --goal '0.6 0' --log runs/planning_network_smoke/closed_loop_verified.jsonl
 ```
 
 在已知室内场景中 5 次控制段后，独立环境观测判为成功；最终 `(x,y)=(0.52145,0.00329)` m，目标 `(0.6,0)` m、容差 0.15 m。记录了 5 条 plan、5 条实测 transition、5 条残差。整段规划耗时约 3.28–22.00 ms，首段包含首次推理开销；这是单任务烟测，不是成功率、恢复能力或低延迟统计结论。

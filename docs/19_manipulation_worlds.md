@@ -26,7 +26,7 @@
 ```bash
 cd /home/chl/GitHub/CodeSpace/world-model-agent-lab-main
 conda activate wmal
-export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$PWD/src"
 
 # 积木工作台，窗口持续运行
 python scripts/workcell_sim.py --task stack_block

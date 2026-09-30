@@ -7,4 +7,7 @@ dependencies:
   - mujoco>=3.2,<4
   - pip
   - pip:
-      - -e ".[simulation,walking]"
+      # CUDA 12.8 build includes the RTX 5060 Ti (sm_120) kernels.
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0+cu128
+      - -e ".[simulation,walking,visual-world,visual-data,robot-data]"

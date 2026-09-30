@@ -94,18 +94,14 @@ PYTHONPATH=src python scripts/prepare_wma_dataset.py \
 
 ## WMA 上游训练命令
 
-WMA 使用独立环境，避免与本项目 `wmal` 环境的依赖互相覆盖。以下安装步骤来自上游 README；CUDA/PyTorch 仍需按训练机驱动匹配：
+所有项目命令统一使用 `wmal`，不创建或切换上游项目的虚拟环境。WMA 作为可选外部源码依赖接入；它的完整依赖组合尚未在统一环境中验收，因此不能直接照搬上游安装步骤覆盖已验证的 PyTorch/CUDA。先审核依赖解析结果，若存在版本冲突则先修复适配，不用另一个环境绕开。
 
 ```bash
-conda create -n unifolm-wma python=3.10.18 -y
-conda activate unifolm-wma
-conda install pinocchio=3.2.0 ffmpeg=7.1.1 -c conda-forge -y
-git clone --recurse-submodules https://github.com/unitreerobotics/unifolm-world-model-action.git
-cd unifolm-world-model-action
-pip install -e .
-pip install -e external/dlimp
-# 在此环境中也安装本项目的训练辅助脚本及其 YAML/HF 依赖
-pip install -e '/path/to/world-model-agent-lab-main[robot-data]'
+conda activate wmal
+python -m pip install -e '.[robot-data]'
+# 已取得上游源码后，仅做安装计划检查，不自动更改依赖。
+python -m pip install --dry-run -e /opt/unifolm-world-model-action
+python -m pip install --dry-run -e /opt/unifolm-world-model-action/external/dlimp
 ```
 
 从 [WMA Hugging Face 模型页](https://huggingface.co/unitreerobotics/UnifoLM-WMA-0-Base) 登录并接受访问条件后下载 `unifolm_wma_base.ckpt`。模型页的当前 commit 固定为 `b7bb75323e8c614fb9b0d25905d07a0fc11e1793`。官方 WMA 配置和训练记录使用的 G1 loader key 为 `g1_pack_camera`；使用当前官方 WMA checkout 前，仍要确认该 key 在其 config/loader 中存在，且转换后的 CSV 只引用选定的主视角。项目脚本生成独立配置，不修改上游 checkout：
@@ -140,7 +136,7 @@ bash scripts/train.sh
 
 上游示例默认 8 张 GPU，配置示例最多 300000 steps，并每 1000 steps 保存 checkpoint。训练耗时和显存取决于视频尺寸、batch size 与 GPU；开始完整训练前，先按上游要求做小规模启动验证。run 目录保存日志和权重，模型产物应放在 Git 仓库外。
 
-VLA 策略对照使用其独立环境和 LeRobot→HDF5→RLDS 转换链。上游说明推荐 CUDA 12.4，示例训练脚本默认 8 个 processes；在 `run_unifolm_vla_train.sh` 设置 `base_vlm`、`oxe_data_root`、`data_mix`、输出目录和训练步数，再按实际 GPU 数调整 Accelerate 配置。VLA checkpoint 经其 inference/deployment server 调用，不由本项目 `load_dynamics` 读取。
+VLA 策略对照也只能接入本项目 `wmal`，其 LeRobot→HDF5→RLDS 转换链和完整依赖尚未在该环境验证。上游 CUDA/PyTorch 版本要求不能直接替换当前 GPU 构建；应先完成兼容性审核。示例训练脚本默认 8 个 processes；在 `run_unifolm_vla_train.sh` 设置 `base_vlm`、`oxe_data_root`、`data_mix`、输出目录和训练步数，再按实际 GPU 数调整 Accelerate 配置。VLA checkpoint 经其 inference/deployment server 调用，不由本项目 `load_dynamics` 读取。
 
 ## 微调阶段、checkpoint 和评估
 
@@ -159,10 +155,10 @@ VLA 使用其上游 RLDS loader 和训练配置完成 SFT/微调，另存 run/ch
 当前仓库保留 numeric planner，并增加相互独立的策略与视觉预测连接方向：
 
 - 数值状态模型由 `load_dynamics(checkpoint)` 加载，提供 `predict(state, targets, duration_s)`，供 `RolloutPlanner` 在线 rollout。现有 JSON/`.pt` checkpoint 只属于本项目 `JointDynamics`/`NeuralJointDynamics` 格式，不能读取 WMA/VLA checkpoint。
-- `ActionServiceClient` 连接 `/predict_action` 风格的独立 HTTP 服务；`run_agent.py --mode wma-policy` 发送同步相机历史/状态，只映射并执行 chunk 的第一步，然后要求新的同步观测。必须提供 `camera`、`wma_policy.state_order`、action-to-joint 映射、单位、归一化与控制周期。可配置 `success_plugin`（`module:factory` 返回 `(instruction, observation) -> bool` 判据）；无成功检测器时只会在预算耗尽后退出，不会伪报成功。该服务必须由用户在上游或自己的环境中启动，本项目没有捏造未公开的 WMA 服务端。
+- `ActionServiceClient` 连接 `/predict_action` 风格的独立 HTTP 服务；`run_agent.py --mode wma-policy` 发送同步相机历史/状态，只映射并执行 chunk 的第一步，然后要求新的同步观测。必须提供 `camera`、`wma_policy.state_order`、action-to-joint 映射、单位、归一化与控制周期。可配置 `success_plugin`（`module:factory` 返回 `(instruction, observation) -> bool` 判据）；无成功检测器时只会在预算耗尽后退出，不会伪报成功。服务端也应在本项目 `wmal` 中完成依赖兼容性适配后启动；目前未提供或验证完整 WMA 服务端，不应把客户端协议示例当作可用服务。
 - `VideoPredictionProvider` 是独立离线视觉预测协议；通过显式插件对 held-out 序列评估 MAE/PSNR，输出与数字状态模型分开的 JSON/JSONL。不得把未来帧、策略 action chunk 或未经校准的模型分数塞进 `PredictionReport.predicted_state`。
 
-G1 固定底座模型路径、29 个关节限位、全部 actuator map 和 `pack_camera` 已在 `configs/robots/g1_fixed_base.json` 配置，可运行命令行 MuJoCo 仿真。仍需确认数据集 state/action 顺序、单位、归一化与模型控制语义，添加有驱动的 gripper（若研究任务需要抓取）和成功判据。训练后还需由上游/自建策略服务提供兼容 `/predict_action` 的 HTTPS 或本机 HTTP endpoint。推荐顺序：核对数据许可和 manifest → 上游 dry-run/小规模训练 → held-out 离线评估 → 验证服务协议和动作映射 → 在固定底座仿真验证可映射动作 → 最后开展对照实验。WMA/VLA 训练依赖与当前 `wmal` 环境分开，避免 CUDA/PyTorch/FlashAttention 依赖冲突。
+G1 固定底座模型路径、29 个关节限位、全部 actuator map 和 `pack_camera` 已在 `configs/robots/g1_fixed_base.json` 配置，可运行命令行 MuJoCo 仿真。仍需确认数据集 state/action 顺序、单位、归一化与模型控制语义，添加有驱动的 gripper（若研究任务需要抓取）和成功判据。训练后还需由上游/自建策略服务提供兼容 `/predict_action` 的 HTTPS 或本机 HTTP endpoint。推荐顺序：核对数据许可和 manifest → 统一 `wmal` 内依赖兼容性审核 → 上游 dry-run/小规模训练 → held-out 离线评估 → 验证服务协议和动作映射 → 在固定底座仿真验证可映射动作 → 最后开展对照实验。出现 CUDA/PyTorch/FlashAttention 依赖冲突时，应修复可选上游适配并重新验证，不切换到其他项目环境。
 
 ## 许可证与可复现性
 

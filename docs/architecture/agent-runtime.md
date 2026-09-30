@@ -144,4 +144,4 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_g1_ros2_integration
 
 ### 本地验证记录
 
-2026-09-30：在项目 `.venv` 中执行 `PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`，共 85 项，84 项通过，1 项 ROS2 实际通信测试因本机没有 rclpy/生成接口而跳过。新增架构行为测试共 23 项，覆盖三分支技能适配、API 恢复、预算、原目标保留、残差校准、旧回执、重复动作、超时锁存及统计输出。现有本地 HTTP 服务与真实 MuJoCo 的 G1 协调端到端测试通过；它使用测试预测模型，不代表外部大模型或训练模型性能验证。为运行既有行走测试，在本地 `.venv` 安装了项目 walking extra 所需的 onnxruntime。`git diff --check` 通过。
+2026-09-30 历史验收：当时共 85 项，84 项通过，1 项 ROS2 实际通信测试因本机没有 rclpy/生成接口而跳过。新增架构行为测试共 23 项，覆盖三分支技能适配、API 恢复、预算、原目标保留、残差校准、旧回执、重复动作、超时锁存及统计输出。现有本地 HTTP 服务与真实 MuJoCo 的 G1 协调端到端测试通过；它使用测试预测模型，不代表外部大模型或训练模型性能验证。`git diff --check` 通过。当前运行统一使用 `wmal`，其中包含项目 walking extra 所需的 ONNX Runtime；在 `conda activate wmal` 后执行 `PYTHONPATH=src python -m unittest discover -s tests -v`，最新结果以视觉网络验收文档为准。
