@@ -1,0 +1,5 @@
+# Versioned wmal.g1.session.v1 envelope; simulation only.
+string json
+---
+bool ok
+string json

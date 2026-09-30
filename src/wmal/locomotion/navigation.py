@@ -1,6 +1,7 @@
 """Global known-map routing around a local learned-model planner."""
 import math
 import copy
+from wmal.planners.replan import NavigationStalled
 from wmal.locomotion.contracts import G1Goal
 
 
@@ -17,6 +18,16 @@ class NavigationPlanner:
         self.episode = None
         self.goal_key = None
         self.last_yaw = None
+
+    def reset_attempt(self):
+        self.last_position = None
+        self.stalled = 0
+        self.last_yaw = None
+        self.local.last_evidence = {}
+
+    @property
+    def last_evidence(self):
+        return self.local.last_evidence
 
     @property
     def feedback_scale(self):
@@ -38,7 +49,7 @@ class NavigationPlanner:
         self.last_position = position
         self.last_yaw = state.yaw
         if self.stalled >= 12:
-            raise ValueError('Navigation stalled for twelve cycles')
+            raise NavigationStalled('Navigation stalled for twelve cycles')
         route = self.scene.route(position, (goal.x, goal.y))
         waypoint = route[1]
         for candidate in route[1:]:

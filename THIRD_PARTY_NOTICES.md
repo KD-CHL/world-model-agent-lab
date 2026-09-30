@@ -2,12 +2,15 @@
 
 Reviewed 2026-09-24. Repository code below is cited as technical reference unless the row explicitly states that an asset is bundled. No UnifoLM weights or datasets are bundled.
 
+Planning-network source review updated 2026-09-30; pinned commits and transferred mechanisms are documented in [the training architecture evidence matrix](docs/architecture/planning-network.md). This update does not change the bundled asset notices.
+
 | Project | Repository | Upstream code license | Use in this project |
 | --- | --- | --- | --- |
 | Continuous-control world model | https://github.com/nicklashansen/tdmpc2 | MIT | Architecture and planning interface reference |
 | Modular model-based control toolbox | https://github.com/facebookresearch/mbrl-lib | MIT; repository archived | Separation of model, rollout and trajectory search |
 | Visual predictive world models | https://github.com/facebookresearch/jepa-wms | CC BY-NC 4.0 | Feature prediction interface reference only; no code or weights bundled |
 | Goal-image predictive planning | https://github.com/gaoyuezhou/dino_wm | MIT | Goal-image feature planning interface reference |
+| Recurrent predictive policy learning | https://github.com/danijar/dreamerv3 | MIT | Observation/imagination and episode-reset design reference; no RSSM implementation or weights bundled |
 | Unitree world-model-action (UnifoLM-WMA) | https://github.com/unitreerobotics/unifolm-world-model-action | CC BY-NC-SA 4.0 | Training/data/inference workflow reference only; no source or weights copied |
 | Unitree vision-language-action (UnifoLM-VLA) | https://github.com/unitreerobotics/unifolm-vla | No root LICENSE file found during review | Training/dataset workflow reference only; verify code, model and dataset terms before use |
 | Unitree MuJoCo G1 29-DOF model | https://github.com/unitreerobotics/unitree_mujoco/tree/1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d/unitree_robots/g1 | BSD 3-Clause; license copy in `robots/assets/unitree_g1/LICENSE` | Bundled source model and its 36 referenced STL meshes; project derivative removes the floating base joint and adds a floor, light, and `pack_camera`; see `robots/assets/unitree_g1/README.md` |

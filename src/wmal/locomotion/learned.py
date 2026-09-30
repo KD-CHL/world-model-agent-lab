@@ -64,7 +64,8 @@ class LearnedG1Dynamics:
                             roll=float(mean[3]), pitch=float(mean[4]),
                             z=max(0., float(mean[5])), pelvis_height=max(0., float(mean[5])))
         return G1Prediction(predicted, {'position_variance': float(sum(variance[:2]) * duration_s**2),
-                                        'posture_variance': float(sum(variance[3:]))})
+                                        'posture_variance': float(sum(variance[3:]))},
+                            uncertainty_kind='ensemble_spread')
 
     def save(self, path):
         atomic_json(path, {'schema': 'wmal.g1.ridge.v1', 'weights': self.weights.tolist(),

@@ -1,5 +1,10 @@
-"""Design placeholder: planners/replan.
+"""Typed recoverable planning failures and explicit task-level limits."""
+class NavigationStalled(ValueError):
+    pass
 
-See docs/03_architecture.md through docs/06_experiments_and_data.md.
-No algorithm or runtime behavior is implemented in this file.
-"""
+
+class NoFeasibleCandidate(ValueError):
+    pass
+
+
+RECOVERABLE = frozenset({'stalled', 'no_candidate', 'budget_exhausted', 'replan_required'})

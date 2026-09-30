@@ -89,6 +89,8 @@ class ActionPolicyRunner:
                 self.log("policy_observation", {"episode_id": episode,
                                                 "step_id": history[-1].observation.step_id,
                                                 "model_version": chunk.model_version})
+                if self.success_checker is not None and self.success_checker(instruction, history[-1].observation):
+                    return PolicyTaskResult("succeeded", cycles, "Success verified after final action")
             return PolicyTaskResult("budget_exhausted", cycles, "No success detector or success not observed")
         except (ValueError, TypeError, KeyError, TimeoutError, RuntimeError, OSError) as exc:
             self.log("policy_failure", {"error_type": type(exc).__name__})

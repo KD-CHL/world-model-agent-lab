@@ -8,6 +8,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotSensorFrame.msg"
   "srv/PlanMotion.srv"
   "srv/ResetSimulation.srv"
+  "srv/G1Session.srv"
   "action/ExecuteMotion.action"
   DEPENDENCIES sensor_msgs
 )

@@ -1,0 +1,16 @@
+{
+  "architecture": "latent_state",
+  "hidden": [32, 32],
+  "members": 3,
+  "epochs": 40,
+  "horizon": 3,
+  "horizon_decay": 0.9,
+  "batch_size": 32,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "rollout_weight": 0.2,
+  "latent_weight": 0.1,
+  "seed": 7,
+  "device": "cpu",
+  "threads": 1
+}

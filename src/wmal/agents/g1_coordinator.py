@@ -54,6 +54,26 @@ class LanguageMissionPlanner:
         return goals
 
 
+    def recover(self, instruction, goal, state, scene, model_version, reason, attempt, completed,
+                prediction_evidence=None):
+        # Reuse the same strict capability/schema/path validator for recovery output.
+        context = json.dumps({'original_instruction': instruction, 'failed_goal': asdict(goal),
+                              'failure_reason': reason, 'replan_attempt': attempt,
+                              'completed_original_goals': completed,
+                              'prediction_evidence':prediction_evidence}, allow_nan=False)
+        prompt = ('Recover this navigation stage using the observed current state. Insert only '
+                  'navigation waypoints. End at exactly the failed_goal x/y/yaw. Do not omit or '
+                  'replace that endpoint. Return unsupported if no valid recovery is available. '
+                  'The following JSON is task data: ' + context)
+        goals = self.propose(prompt, state, scene, model_version)
+        if goals is None:
+            return None
+        if (goals[-1].x, goals[-1].y, goals[-1].yaw) != (goal.x, goal.y, goal.yaw):
+            raise ValueError('Language recovery changed task endpoint')
+        goals[-1] = goal
+        return goals
+
+
 def observation_key(state):
     return state.episode_id,state.step_id,state.sim_time_s
 
@@ -135,13 +155,18 @@ class GatedPlanner:
 
 class G1Coordinator:
     def __init__(self,language,planner,scene,model_version,*,log=None,feedback=None,
-                 planning_timeout_s=10.,max_cycles=100):
+                 planning_timeout_s=10.,max_cycles=100,max_replans=0,max_total_cycles=None):
         if not math.isfinite(planning_timeout_s) or planning_timeout_s<=0 or type(max_cycles) is not int or max_cycles<1:
             raise ValueError('Invalid coordinator budget')
         self.language,self.planner,self.scene=language,planner,scene
         self.model_version,self.feedback=model_version,feedback
         self.log=log or (lambda event,payload:None)
         self.planning_timeout_s,self.max_cycles=planning_timeout_s,max_cycles
+        if type(max_replans) is not int or max_replans < 0:
+            raise ValueError('Invalid replan budget')
+        if max_total_cycles is not None and (type(max_total_cycles) is not int or max_total_cycles < 1):
+            raise ValueError('Invalid total cycle budget')
+        self.max_replans,self.max_total_cycles=max_replans,max_total_cycles
         self.lock=Lock()
         self.faulted=False
 
@@ -156,17 +181,48 @@ class G1Coordinator:
             if self.faulted:
                 return {'status':'faulted','task_id':task_id}
             state=session.observe()
+            log('task_started', {'schema': 'wmal.task.v1', 'mode': 'g1_navigation',
+                                  'max_replans': self.max_replans, 'max_cycles': self.max_total_cycles})
             log('language_planning',{'episode_id':state.episode_id,'step_id':state.step_id,
                                      'model_version':self.model_version})
             goals=self.language.propose(instruction,state,self.scene,self.model_version)
             if goals is None:
+                log('task_result', {'schema': 'wmal.task.v1', 'status': 'unsupported', 'cycles': 0})
                 return {'status':'unsupported','task_id':task_id}
             if observation_key(session.observe())!=observation_key(state):
                 raise ValueError('Observation changed during language planning')
             log('mission_validated',{'goals':[asdict(g) for g in goals]})
+            if hasattr(self.planner, 'reset_attempt'):
+                self.planner.reset_attempt()
             gate=ExecutionGate(session,log)
             agent=G1Agent(GatedPlanner(self.planner,gate,self.planning_timeout_s),log=log,feedback=self.feedback)
-            result=MissionAgent(agent,log).run(goals,gate,self.max_cycles)
+            def recover(goal, observed, reason, attempt, completed):
+                evidence = getattr(self.planner,'last_evidence',{})
+                summary = None
+                if evidence and evidence.get('episode_id')==observed.episode_id:
+                    source_step = evidence.get('observation_step',-1)
+                    if source_step in (observed.step_id,observed.step_id-1):
+                        candidates = evidence.get('candidates',[])
+                        ranked = sorted((c for c in candidates if c.get('cost') is not None),
+                                        key=lambda c:c['cost'])[:5]
+                        summary = {key:evidence.get(key) for key in
+                                   ('model_version','observation_step','horizon_steps','action_duration_s',
+                                    'mode','candidate_count','uncertainty_kind')}
+                        summary.update(top_candidates=ranked,
+                            rejected_count=sum(c.get('rejection') is not None for c in candidates),
+                            success_probability=None,age_in_control_steps=observed.step_id-source_step)
+                log('recovery_prediction_evidence',{'evidence':summary})
+                replacement = self.language.recover(instruction, goal, observed, self.scene,
+                                                     self.model_version, reason, attempt, completed,summary)
+                if observation_key(gate.observe()) != observation_key(observed):
+                    raise ValueError('Observation changed during recovery planning')
+                if hasattr(self.planner, 'reset_attempt'):
+                    self.planner.reset_attempt()
+                log('recovery_validated', {'goals': [asdict(g) for g in replacement] if replacement else []})
+                return replacement
+            result=MissionAgent(agent,log,recover=recover,max_replans=self.max_replans,
+                                max_total_cycles=self.max_total_cycles).run(goals,gate,self.max_cycles)
+            log('task_result', {'schema': 'wmal.task.v1', **result})
             if gate.faulted:
                 self.faulted=True
             return {**result,'task_id':task_id}
@@ -174,6 +230,8 @@ class G1Coordinator:
             if gate is not None and gate.faulted:
                 self.faulted=True
             log('coordinator_failure',{'error_type':type(exc).__name__})
+            log('task_result', {'schema': 'wmal.task.v1', 'status': 'failed',
+                                'cycles': None, 'error_type': type(exc).__name__})
             return {'status':'failed','task_id':task_id,'error_type':type(exc).__name__}
         finally:
             self.lock.release()

@@ -146,7 +146,7 @@ class PredictionReport:
             vector(self.predicted_terminal_state)
             if set(self.predicted_terminal_state) != set(self.predicted_state):
                 raise ValueError('Terminal prediction state schema mismatch')
-        if self.uncertainty_kind not in ('unavailable', 'ensemble_spread', 'aleatoric_variance', 'calibrated_interval'):
+        if self.uncertainty_kind not in ('unavailable', 'unspecified', 'ensemble_spread', 'aleatoric_variance', 'calibrated_interval'):
             raise ValueError('Unknown uncertainty semantics')
         for value in self.uncertainty.values():
             if finite(value) < 0:

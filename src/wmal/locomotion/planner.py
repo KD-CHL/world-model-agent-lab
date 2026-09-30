@@ -1,5 +1,5 @@
 """Sampling-based, action-conditioned receding-horizon G1 planner."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import numpy as np
@@ -7,6 +7,7 @@ import numpy as np
 from wmal.locomotion.contracts import (G1_POLICY_PERIOD_S, G1Goal, G1State,
                                        G1VelocityAction)
 from wmal.locomotion.world_model import WorldModelAdapter
+from wmal.planners.replan import NoFeasibleCandidate
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,18 @@ class G1Plan:
     predicted_state: G1State
     predicted_terminal_state: G1State
     objective_cost: float
+    horizon_steps: int = 1
+    uncertainty: dict = field(default_factory=dict)
+    uncertainty_kind: str = 'unavailable'
+    evidence: dict = field(default_factory=dict)
+
+    def prediction_report(self):
+        from wmal.communication.contracts import PredictionReport
+        names = ('x', 'y', 'yaw', 'roll', 'pitch', 'pelvis_height')
+        return PredictionReport(self.model_version, self.observation_step, self.horizon_steps,
+            {key: getattr(self.predicted_state, key) for key in names}, self.objective_cost,
+            self.uncertainty_kind, dict(self.uncertainty),
+            {key: getattr(self.predicted_terminal_state, key) for key in names})
 
 
 def _wrap_angle(value):
@@ -44,6 +57,59 @@ class G1RolloutPlanner:
         self.uncertainty_weight = float(uncertainty_weight)
         self.feedback_scale = 1.0
         self.scene = None
+        self.last_evidence = {}
+
+    def _batch_score(self, state, goal, sequences, rollout):
+        """Use mean outcomes for progress and each member for modelled constraint screening."""
+        paths = rollout.means()
+        evaluations, results = [], []
+        spread = rollout.members[...,:2].var(axis=0).sum(axis=-1)
+        for index, (sequence, path) in enumerate(zip(sequences,paths)):
+            reason = None
+            members = rollout.members[:,index]
+            if np.any(members[...,8]<.48) or np.any(np.abs(members[...,6:8])>.65):
+                reason = 'predicted_posture_constraint'
+            if self.scene is not None and reason is None:
+                # Member paths can straddle an obstacle while their mean passes through it.
+                for member in np.concatenate([members,path[None]],axis=0):
+                    previous = (state.x,state.y)
+                    for point in member:
+                        if not self.scene.segment_free(previous,tuple(point[:2])):
+                            reason = 'predicted_scene_constraint'
+                            break
+                        previous = tuple(point[:2])
+                    if reason:
+                        break
+            current = path[-1]
+            position_error = math.hypot(current[0]-goal.x,current[1]-goal.y)
+            yaw_error = 0. if goal.yaw is None else abs(_wrap_angle(goal.yaw-current[2]))
+            unstable = max(0.,abs(current[6])-.35)**2+max(0.,abs(current[7])-.35)**2
+            low_height = max(0.,.58-current[8])
+            control_cost = float(np.sum(sequence[:,:2]**2)+.3*np.sum(sequence[:,2]**2))
+            total_spread = float(np.sqrt(spread[index]).sum())
+            cost = (position_error+.4*yaw_error+5.*unstable+10.*low_height
+                    +.04*control_cost+self.uncertainty_weight*total_spread)
+            evaluations.append({'candidate_id':index,'cost':float(cost) if reason is None else None,
+                'rejection':reason,'terminal_distance_m':position_error,
+                'terminal_position_spread_m':float(np.sqrt(spread[index,-1])),
+                'first_action':sequence[0].tolist()})
+            results.append((float(cost) if reason is None else float('inf'),index))
+        self.last_evidence = {'schema':'wmal.planning_evidence.v1','mode':'member_preserving_batch',
+            'model_version':self.model.version,'episode_id':state.episode_id,'observation_step':state.step_id,
+            'horizon_steps':self.horizon,'action_duration_s':self.action_duration_s,
+            'candidate_count':len(sequences),'ensemble_members':len(rollout.members),
+            'network_forward_calls':len(rollout.members)*self.horizon,
+            'model_imagination_steps':rollout.imagination_steps,
+            'uncertainty_kind':'ensemble_spread','success_probability':None,
+            'candidates':evaluations}
+        cost,index = min(results)
+        if not math.isfinite(cost):
+            raise NoFeasibleCandidate('World model predicts no safe candidate sequence')
+        self.last_evidence['selected_candidate'] = index
+        first,terminal = rollout.prediction(index,0),rollout.prediction(index,self.horizon-1)
+        return G1Plan(self.model.version,state.step_id,rollout.candidates[index][0],first.state,
+                      terminal.state,cost,self.horizon,dict(first.uncertainty),first.uncertainty_kind,
+                      dict(self.last_evidence))
 
     def _sequences(self, state, goal):
         rng = np.random.default_rng(self.seed + state.step_id)
@@ -90,8 +156,11 @@ class G1RolloutPlanner:
                     or abs(current.pitch) > 0.65):
                 return float('inf'), None, None
             if index == 0:
-                first_prediction = current
-            total_uncertainty += sum(prediction.uncertainty.values())
+                first_prediction = prediction
+            # The learned adapter defines position_variance in square metres.
+            # Unknown provider spread and mixed posture units are not added to distance cost.
+            if prediction.uncertainty_kind == 'ensemble_spread':
+                total_uncertainty += math.sqrt(prediction.uncertainty.get('position_variance', 0.))
             control_cost += action.vx ** 2 + action.vy ** 2 + 0.3 * action.yaw_rate ** 2
         position_error = math.hypot(current.x - goal.x, current.y - goal.y)
         yaw_error = 0.0 if goal.yaw is None else abs(_wrap_angle(goal.yaw - current.yaw))
@@ -104,13 +173,28 @@ class G1RolloutPlanner:
     def plan(self, state, goal):
         if not isinstance(state, G1State) or not isinstance(goal, G1Goal):
             raise ValueError('G1 planner requires G1State and G1Goal')
+        sequences = self._sequences(state,goal)
+        actions = [[G1VelocityAction(*map(float,values),self.action_duration_s) for values in row]
+                   for row in sequences]
+        rollout = self.model.rollout(state,actions)
+        if rollout is not None:
+            return self._batch_score(state,goal,sequences,rollout)
         best = None
-        for sequence in self._sequences(state, goal):
+        self.last_evidence = {'schema':'wmal.planning_evidence.v1','mode':'scalar_mean_feedback',
+                              'model_version':self.model.version,'episode_id':state.episode_id,
+                              'observation_step':state.step_id,'candidate_count':len(sequences),
+                              'success_probability':None,'candidates':[]}
+        for index,sequence in enumerate(sequences):
             result = self._score(state, goal, sequence)
+            self.last_evidence['candidates'].append({'candidate_id':index,
+                'cost':float(result[0]) if math.isfinite(result[0]) else None,
+                'rejection':None if math.isfinite(result[0]) else 'predicted_constraint'})
             if best is None or result[0] < best[0]:
                 best = result
                 best_action = G1VelocityAction(*map(float, sequence[0]), self.action_duration_s)
         if best is None or not math.isfinite(best[0]):
-            raise ValueError('World model predicts no safe candidate sequence')
+            raise NoFeasibleCandidate('World model predicts no safe candidate sequence')
         return G1Plan(self.model.version, state.step_id, best_action,
-                      best[1], best[2], float(best[0]))
+                      best[1].state, best[2], float(best[0]), self.horizon,
+                      dict(best[1].uncertainty), best[1].uncertainty_kind if best[1].uncertainty else 'unavailable',
+                      dict(self.last_evidence))

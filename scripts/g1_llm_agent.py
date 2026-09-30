@@ -19,6 +19,12 @@ def main(argv=None):
     parser.add_argument('--config',default='configs/g1_indoor.json')
     parser.add_argument('--instruction',help='One task; omit for persistent interactive session')
     parser.add_argument('--headless',action='store_true')
+    parser.add_argument('--transport', choices=('direct', 'ros2'), default='direct')
+    parser.add_argument('--service', default='/wmal/g1/session')
+    parser.add_argument('--ros-timeout', type=float, default=10.)
+    parser.add_argument('--max-replans', type=int, default=2)
+    parser.add_argument('--max-total-cycles', type=int, default=300)
+    parser.add_argument('--calibration', help='Validation residual calibration JSON')
     parser.add_argument('--log',default='runs/g1_llm/events.jsonl')
     args=parser.parse_args(argv)
     try:
@@ -30,10 +36,22 @@ def main(argv=None):
         scene=IndoorScene()
         log=EventLog(args.log)
         planner=NavigationPlanner(G1RolloutPlanner(model,**config['planner']),scene)
+        calibration = None
+        if args.calibration:
+            from wmal.models.calibration import ResidualCalibration
+            calibration = ResidualCalibration.load(args.calibration)
+            calibration.validate_for(model.version, planner.local.action_duration_s)
         coordinator=G1Coordinator(LanguageMissionPlanner(client),planner,planner.scene,model.version,
-                                  log=log,feedback=ResidualFeedback(**config.get('feedback',{})),
-                                  max_cycles=config.get('agent',{}).get('max_cycles_per_goal',100))
-        with G1MuJoCoSession(viewer=not args.headless,realtime=not args.headless,scene=scene) as session:
+                                  log=log,feedback=ResidualFeedback(calibration=calibration, **config.get('feedback',{})),
+                                  max_cycles=config.get('agent',{}).get('max_cycles_per_goal',100),
+                                  max_replans=args.max_replans, max_total_cycles=args.max_total_cycles)
+        if args.transport == 'ros2':
+            from wmal.communication.g1_ros2 import G1Ros2Session
+            from wmal.communication.g1_session_protocol import scene_digest
+            connection = G1Ros2Session(scene_digest(scene), args.service, args.ros_timeout)
+        else:
+            connection = G1MuJoCoSession(viewer=not args.headless,realtime=not args.headless,scene=scene)
+        with connection as session:
             while session.is_running:
                 try:
                     instruction=args.instruction or input('任务（quit 退出）> ')

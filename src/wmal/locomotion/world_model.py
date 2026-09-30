@@ -19,6 +19,23 @@ class WorldModelAdapter:
             raise ValueError(f'World model action_schema must be {G1_ACTION_SCHEMA}')
         self.model, self.version = model, version
 
+    def rollout(self, state, candidates):
+        """Optional optimized endpoint; unsupported providers retain scalar prediction."""
+        from wmal.locomotion.rollouts import EnsembleRollout
+        method = getattr(self.model,'rollout',None)
+        if not callable(method):
+            return None
+        if not isinstance(state,G1State) or not candidates or any(not row for row in candidates):
+            raise ValueError('Invalid rollout input')
+        try:
+            result = method(state,candidates)
+        except Exception as exc:
+            raise RuntimeError(f'World-model rollout failed ({type(exc).__name__})') from None
+        if (not isinstance(result,EnsembleRollout) or result.model_version!=self.version
+                or result.initial!=state or result.candidates!=tuple(tuple(row) for row in candidates)):
+            raise ValueError('World-model rollout has incompatible provenance or actions')
+        return result
+
     def predict(self, state, action, duration_s=None):
         if not isinstance(state, G1State) or not isinstance(action, G1VelocityAction):
             raise ValueError('World model received an incompatible G1 state or action')
@@ -34,10 +51,10 @@ class WorldModelAdapter:
         if not isinstance(prediction, G1Prediction):
             raise ValueError('World model must return G1Prediction or G1State')
         result = prediction.state
-        if result.episode_id != state.episode_id or result.step_id <= state.step_id:
+        if result.episode_id != state.episode_id or result.step_id != state.step_id+1:
             raise ValueError('World-model prediction has stale episode or step provenance')
-        if result.sim_time_s <= state.sim_time_s:
-            raise ValueError('World-model prediction time must advance')
+        if abs(result.sim_time_s-state.sim_time_s-duration) > 1e-6:
+            raise ValueError('World-model prediction time must match action duration')
         if bool(state.joint_positions) != bool(result.joint_positions):
             raise ValueError('World-model prediction state schema mismatch')
         if set(state.joint_positions) != set(result.joint_positions):

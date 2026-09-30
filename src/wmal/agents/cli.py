@@ -23,19 +23,21 @@ def run_agent():
     parser.add_argument('--log', default='runs/agent/events.jsonl')
     args = parser.parse_args()
     from wmal.logging.events import EventLog
+    from wmal.agents.skill_adapters import run_registered_task, joint_skill, visual_policy_skill
+    log = EventLog(args.log)
     try:
         config = read_config(args.config)
         profile = RobotProfile(**config['profile'])
         if args.mode == 'goal':
             from wmal.agents.api_client import ApiModelClient
-            from wmal.agents.runner import AgentRunner
             from wmal.communication.ros2_transport import Ros2Channel
             llm = ApiModelClient.from_env()
             with Ros2Channel(profile) as channel:
-                result = AgentRunner(llm, channel, profile, max_cycles=args.max_cycles,
-                                     timeout_s=args.timeout, log=EventLog(args.log)).run(args.instruction)
+                result = run_registered_task(args.instruction, channel,
+                    lambda emit: joint_skill(llm, profile, max_cycles=args.max_cycles,
+                                             timeout_s=args.timeout, log=emit),
+                    max_cycles=args.max_cycles, log=log)
         else:
-            from wmal.agents.action_runner import ActionPolicyRunner
             from wmal.communication.ros2_transport import Ros2Channel
             from wmal.models.action_service import ActionServiceClient
             from wmal.robots.action_mapping import ActionMapping
@@ -51,14 +53,14 @@ def run_agent():
             client = ActionServiceClient(policy['base_url'], policy['model_version'],
                                          timeout_s=args.timeout)
             with Ros2Channel(profile, camera=camera) as channel:
-                result = ActionPolicyRunner(
-                    client, channel, profile, mapping,
+                result = run_registered_task(args.instruction, channel, lambda emit: visual_policy_skill(
+                    client, profile, mapping,
                     state_order=policy['state_order'],
                     history_length=policy.get('history_length', 2),
                     conditioning_steps=policy.get('conditioning_steps', 1),
                     success_checker=success_checker,
-                    log=EventLog(args.log)).run(args.instruction, max_cycles=args.max_cycles,
-                                               timeout_s=args.timeout)
+                    log=emit, max_cycles=args.max_cycles, timeout_s=args.timeout),
+                    max_cycles=args.max_cycles, log=log)
         print(json.dumps(asdict(result), ensure_ascii=False))
         return 0 if result.status == 'succeeded' else 1
     except (ImportError, ValueError, KeyError, OSError, RuntimeError) as exc:

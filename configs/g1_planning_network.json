@@ -1,0 +1,12 @@
+{
+  "world_model": {
+    "factory": "wmal.models.motion_network:load",
+    "config": {"checkpoint": "runs/planning_network/model.pt", "device": "cpu"}
+  },
+  "planner": {"samples": 48, "horizon": 3, "seed": 0, "action_duration_s": 0.5,
+              "max_linear_velocity": 0.3, "max_yaw_rate": 0.3, "uncertainty_weight": 0.02},
+  "feedback": {"threshold_m": 0.08, "alpha": 0.3, "minimum_scale": 0.25},
+  "simulator": {"viewer": true, "realtime": true, "scene": "indoor"},
+  "agent": {"max_cycles_per_goal": 100},
+  "log_path": "runs/planning_network/agent.jsonl"
+}

@@ -1,9 +1,10 @@
 """Task-scoped Agent loop; simulator-session lifetime remains with its caller."""
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import math
 import time
 
 from wmal.locomotion.contracts import G1Goal, G1State
+from wmal.planners.replan import NavigationStalled, NoFeasibleCandidate
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,8 @@ class G1Agent:
                 planning_start = time.perf_counter()
                 plan = self.planner.plan(state, goal)
                 planning_latency_s = time.perf_counter() - planning_start
+                if self.feedback is not None and getattr(self.feedback, 'calibration', None) is not None:
+                    self.feedback.calibration.validate_for(plan.model_version, plan.action.duration_s)
                 if plan.observation_step != state.step_id:
                     raise ValueError('Planner returned a stale plan')
                 self.log('plan', {'episode_id': episode, 'observation_step': state.step_id,
@@ -70,7 +73,11 @@ class G1Agent:
                                              'duration_s': plan.action.duration_s},
                                   'predicted_state': plan.predicted_state.__dict__,
                                   'predicted_terminal_state': plan.predicted_terminal_state.__dict__,
-                                  'objective_cost': plan.objective_cost})
+                                  'objective_cost': plan.objective_cost,
+                                  'prediction': asdict(plan.prediction_report()),
+                                  'planning_evidence': plan.evidence,
+                                  'prediction_horizon_s': plan.horizon_steps * plan.action.duration_s,
+                                  'prediction_state_schema': 'wmal.g1.base_state.v1'})
                 session.step(plan.action, plan.action.duration_s)
                 cycles += 1
                 previous = state
@@ -80,15 +87,35 @@ class G1Agent:
                 if (state.episode_id != previous.episode_id or state.step_id <= previous.step_id
                         or state.sim_time_s <= previous.sim_time_s):
                     raise ValueError('Simulator observation is stale or changed episode')
+                self.log('executed_transition', {'schema':'wmal.executed_transition.v1',
+                    'before':asdict(previous),'action':asdict(plan.action),'after':asdict(state),
+                    'actual_duration_s':state.sim_time_s-previous.sim_time_s,
+                    'model_version':plan.model_version,
+                    'predicted_state':asdict(plan.predicted_state)})
+                replan_required = False
                 if self.feedback is not None:
-                    self.log('feedback', self.feedback.update(plan.predicted_state, state, self.planner))
+                    feedback = self.feedback.update(plan.predicted_state, state, self.planner)
+                    self.log('feedback', feedback)
+                    replan_required = feedback.get('replan_required', False)
                 self.log('prediction_residual', {
                     'episode_id': state.episode_id, 'observation_step': state.step_id,
                     'model_version': plan.model_version,
+                    'duration_s': plan.action.duration_s,
                     'position_error_m': math.hypot(state.x - plan.predicted_state.x,
                                                    state.y - plan.predicted_state.y),
                     'yaw_error_rad': abs((state.yaw - plan.predicted_state.yaw + math.pi)
                                          % (2 * math.pi) - math.pi)})
+                if not self._safe(state):
+                    self.log('safety_stop', {'step_id': state.step_id})
+                    return G1TaskResult('safety_stop', cycles, 'G1 posture outside safety limits', state)
+                if self._goal_reached(state, goal):
+                    return G1TaskResult('succeeded', cycles, 'Goal observed within tolerance', state)
+                if replan_required:
+                    return G1TaskResult('replan_required', cycles, 'Calibrated residual alarm', state)
+        except (NavigationStalled, NoFeasibleCandidate) as exc:
+            status = 'stalled' if isinstance(exc, NavigationStalled) else 'no_candidate'
+            self.log('planning_event', {'reason': status})
+            return G1TaskResult(status, cycles, status, state)
         except (ValueError, TypeError, RuntimeError, OSError) as exc:
             self.log('failure', {'error_type': type(exc).__name__, 'detail': str(exc)})
             return G1TaskResult('failed', cycles, type(exc).__name__)

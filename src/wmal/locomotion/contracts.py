@@ -90,8 +90,11 @@ class G1VelocityAction:
 class G1Prediction:
     state: G1State
     uncertainty: dict = field(default_factory=dict)
+    uncertainty_kind: str = 'unspecified'
 
     def __post_init__(self):
+        if self.uncertainty_kind not in ('unspecified', 'unavailable', 'ensemble_spread', 'aleatoric_variance'):
+            raise ValueError('Invalid uncertainty semantics')
         if not isinstance(self.state, G1State):
             raise ValueError('Prediction must contain a G1State')
         if not isinstance(self.uncertainty, dict):

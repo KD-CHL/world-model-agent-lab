@@ -1,5 +1,7 @@
 # API 大模型规划与 G1 执行协调
 
+技能运行、任务恢复、ROS2 会话和校准扩展见 [Agent 架构优化](architecture/agent-runtime.md)。
+
 ## 分层职责
 
 ```text
@@ -57,9 +59,9 @@ python scripts/g1_llm_agent.py --headless \
 - 预测必须对应同一 episode、下一执行步和动作时长，执行前再检查观测。
 - 每条动作分配 command ID，执行许可只消费一次，发送及回执写入同一 task ID 的日志。
 - 执行抛出异常或回执时序不符时，将协调器锁定为 faulted，停止后续动作，重新启动会话后恢复；动作本身不自动重试。
-- 协调器一次只运行一个任务。多目标任务每阶段有周期预算，任一阶段失败即结束任务。
+- 协调器一次只运行一个任务。每阶段与整任务都有周期预算；启用 max_replans 时，停滞、无候选、预算耗尽或校准残差告警可以触发有限次 API 恢复。恢复必须保留原目标，通信不确定不自动恢复。
 
-该执行门控是同进程、同步 MuJoCo 会话保护，不是分布式 exactly-once 协议。已有 ROS 2 的 API joint-goal 路径继续可用；新的 G1 协调入口不宣称完成了跨机器网络部署。真机需要机器人端 watchdog 和独立停止接口。
+该执行门控是同进程、同步 MuJoCo 会话保护，不是分布式 exactly-once 协议。已有 ROS 2 的 API joint-goal 路径继续可用；G1 新增 --transport ros2 和 G1Session 服务，协议核心在本地测试，Ubuntu 双进程联调与跨机器网络部署仍需验证。真机需要机器人端 watchdog 和独立停止接口。
 
 ## 日志与验证
 

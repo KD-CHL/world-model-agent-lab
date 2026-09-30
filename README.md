@@ -4,7 +4,11 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
 
-研究主线：[预测可信度辅助机器人Agent规划与两条训练路线](docs/21_research_plan_prediction_reliability.md)；[数据集核查清单](docs/22_world_model_dataset_catalog.md)。固定技能和任务状态机，优先微调视觉动作条件预测模型，按A0—A3独立消融后再接LLM/VLM。
+研究主线：[预测可信度辅助机器人Agent规划与两条训练路线](docs/21_research_plan_prediction_reliability.md)；[数据集核查清单](docs/22_world_model_dataset_catalog.md)。固定技能和任务状态机，当前先验证状态规划网络的训练闭环；视觉动作条件模型保留为独立支线，两条路线均需独立消融。
+
+规划世界模型训练网络：[神经动力学集成的结构、采样、训练、续训和规划接入](docs/architecture/motion-network.md)。入口 `scripts/train_motion_network.py`，支持 `collect`、`train`、`evaluate`；G1 接入配置为 `configs/g1_neural.json`。
+
+Agent 架构优化：共享技能生命周期、G1 有预算的任务重规划、验证集残差阈值、G1 ROS2 会话与统一日志汇总，见 [设计与启动说明](docs/architecture/agent-runtime.md)。
 
 自然语言 API 规划入口：`python scripts/g1_llm_agent.py`。环境变量配置、模型边界和通信故障处理见 [大模型与 G1 协调指南](docs/20_llm_coordination.md)。
 
@@ -52,7 +56,9 @@ python scripts/g1_agent_sim.py --config configs/g1_research.json
 16. [G1 本地浮动底座步行测试](docs/16_g1_local_walking.md)
 17. [G1/UnifoLM 研究功能实施规格](docs/superpowers/specs/2026-09-23-g1-unifolm-research-track-design.md)
 
-运行主线：MuJoCo 采样训练动作条件状态模型 → API Agent 解析受限关节目标 → ROS 2 规划服务滚动评估候选动作 → ROS 2 action 驱动 MuJoCo → Agent 读取新状态并重新规划。当前训练模型仅在单关节探针上验证。
+运行主线包含关节状态规划与 G1 导航规划。G1 目前支持 MuJoCo 采集 → 多步潜在动力学集成训练 → 候选轨迹批量预测 → Agent 规划及恢复 → 直接或 ROS 2 会话执行 → 观测残差和训练数据导出。G1 训练与直接 MuJoCo 闭环已做本地冒烟验证；ROS 2 实际中间件及其他机器人训练需分别验证。
+
+世界模型训练升级见 [网络、源码参考与闭环接口](docs/architecture/planning-network.md) 和 [本轮验收报告](docs/architecture/planning-network-verification.md)。训练入口为 `scripts/train_motion_network.py`，新配置为 `configs/training/planning_network.json`；旧物理网络和检查点继续可用。参考机制采用独立功能命名，证据表给出固定 GitHub 源码版本。
 
 ## 当前可以执行
 
@@ -126,7 +132,7 @@ G1 数据准备、WMA decision/joint 微调、策略服务调用和离线视频�
 
 ## 目录职责
 
-`configs/` 保存设计参数；`src/wmal/` 按层划分源码位置；`robots/assets/` 预留资产；`scripts/` 预留命令；`examples/` 存接口示例；`data/`、`runs/` 保存未来数据和结果；`tests/` 预留实现后的行为测试。
+`configs/` 保存实验参数；`src/wmal/` 按层组织实现；`robots/assets/` 管理资产入口；`scripts/` 提供采集、训练、仿真和汇总命令；`examples/` 存接口示例；`data/`、`runs/` 保存数据和结果；`tests/` 覆盖训练、规划与通信行为。
 
 `requirements-ubuntu.txt` 说明依赖边界；MuJoCo 可选依赖在 `pyproject.toml`。原始论文仍在本地文献库，未复制PDF。
 
