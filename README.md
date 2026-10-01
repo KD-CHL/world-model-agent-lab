@@ -57,12 +57,22 @@ python scripts/g1_agent_sim.py --config configs/g1_research.json
 15. [基于 UnifoLM 的机器人世界模型训练与微调路线](docs/15_unifolm_training_adaptation.md)
 16. [G1 本地浮动底座步行测试](docs/16_g1_local_walking.md)
 17. [G1/UnifoLM 研究功能实施规格](docs/superpowers/specs/2026-09-23-g1-unifolm-research-track-design.md)
+18. [Agent 实验观测台：实时画面、预测反馈、事件与历史比较](docs/24_agent_monitor.md)
 
 运行主线包含关节状态规划与 G1 导航规划。G1 目前支持 MuJoCo 采集 → 多步潜在动力学集成训练 → 候选轨迹批量预测 → Agent 规划及恢复 → 直接或 ROS 2 会话执行 → 观测残差和训练数据导出。G1 训练与直接 MuJoCo 闭环已做本地冒烟验证；ROS 2 实际中间件及其他机器人训练需分别验证。
 
 世界模型训练升级见 [网络、源码参考与闭环接口](docs/architecture/planning-network.md) 和 [本轮验收报告](docs/architecture/planning-network-verification.md)。训练入口为 `scripts/train_motion_network.py`，新配置为 `configs/training/planning_network.json`；旧物理网络和检查点继续可用。参考机制采用独立功能命名，证据表给出固定 GitHub 源码版本。
 
 ## 当前可以执行
+
+### Agent 实验监控客户端
+
+```bash
+conda activate wmal
+PYTHONPATH=src python scripts/agent_monitor.py --runs-root runs --port 8765
+```
+
+打开 `http://127.0.0.1:8765`，查看任务状态、候选评估、模型预测与真实反馈、事件时间线、训练工件和实验对比。实时 MuJoCo 画面需在实验入口增加 `--monitor`；视觉 Agent 目标完成后保持会话，可在终端输入下一目标。客户端只读、不发送机器人控制命令，完整实时启动与 G1 接入见 [监控指南](docs/24_agent_monitor.md)。
 
 ## 当前模型的数据来源
 
