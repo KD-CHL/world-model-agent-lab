@@ -48,6 +48,14 @@ class RunCatalogTests(unittest.TestCase):
         self.assertTrue(image.startswith(b'\x89PNG\r\n\x1a\n'))
         self.assertGreater(len(image), 40)
 
+    def test_prediction_metadata_reports_available_frames_and_missing_alignment(self):
+        run_id = self.catalog.list_runs()[0]['run_id']
+        info = self.catalog.read_prediction_info(run_id, 'prediction_0_0000.npz')
+        self.assertEqual(info['frame_count'], 2)
+        self.assertFalse(info['aligned'])
+        self.assertEqual(info['available_images'], ['predicted_rgb'])
+        self.assertEqual(info['actions'], [[0.0], [0.0]])
+
     def test_rejects_path_traversal_symlink_escape_and_unknown_run(self):
         run_id = self.catalog.list_runs()[0]['run_id']
         outside = Path(self.temp.name) / 'outside.json'

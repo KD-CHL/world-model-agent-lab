@@ -2,6 +2,7 @@
 from hashlib import sha256
 import json
 import os
+import math
 from pathlib import Path, PurePosixPath
 import struct
 import zlib
@@ -68,7 +69,8 @@ class RunCatalog:
             run_id = self._run_id(relative)
             manifest = {}
             manifest_path = base / 'run_manifest.json'
-            if manifest_path.is_file() and manifest_path.stat().st_size <= _MAX_JSON_BYTES:
+            if (not manifest_path.is_symlink() and manifest_path.is_file()
+                    and manifest_path.stat().st_size <= _MAX_JSON_BYTES):
                 try:
                     value = json.loads(manifest_path.read_text(encoding='utf-8'))
                     if isinstance(value, dict):
@@ -147,15 +149,8 @@ class RunCatalog:
             raise ValueError('Artifact is not a supported prediction archive')
         if type(index) is not int or index < 0 or key not in ('predicted_rgb', 'before_rgb', 'observed_rgb'):
             raise ValueError('Invalid prediction image selector')
-        if target.stat().st_size > _MAX_NPZ_BYTES:
-            raise ValueError('Prediction archive exceeds the byte limit')
+        self._validate_prediction_archive(target)
         try:
-            with zipfile.ZipFile(target) as archive:
-                members = archive.infolist()
-                if (len(members) > 32 or sum(member.file_size for member in members) > _MAX_NPZ_UNPACKED
-                        or any(PurePosixPath(member.filename).is_absolute()
-                               or '..' in PurePosixPath(member.filename).parts for member in members)):
-                    raise ValueError('Prediction archive contains unsafe members')
             with np.load(target, allow_pickle=False) as archive:
                 if key not in archive.files:
                     raise ValueError(f'Prediction image key {key!r} is unavailable')
@@ -187,3 +182,46 @@ class RunCatalog:
         if selected.max(initial=0) <= 1:
             selected = selected * 255
         return _encode_png(np.rint(selected).astype(np.uint8))
+
+    def _validate_prediction_archive(self, target):
+        if target.stat().st_size > _MAX_NPZ_BYTES:
+            raise ValueError('Prediction archive exceeds the byte limit')
+        try:
+            with zipfile.ZipFile(target) as archive:
+                members = archive.infolist()
+                if (len(members) > 32 or sum(m.file_size for m in members) > _MAX_NPZ_UNPACKED
+                        or any('/' in m.filename or '\\' in m.filename
+                               or not m.filename.endswith('.npy') for m in members)):
+                    raise ValueError('Prediction archive contains unsafe members')
+                for member in members:
+                    with archive.open(member) as stream:
+                        version = np.lib.format.read_magic(stream)
+                        if version not in ((1, 0), (2, 0)):
+                            raise ValueError('Unsupported NPY version')
+                        reader = (np.lib.format.read_array_header_1_0 if version == (1, 0)
+                                  else np.lib.format.read_array_header_2_0)
+                        shape, _, dtype = reader(stream)
+                        size = math.prod(shape) * dtype.itemsize
+                        if dtype.hasobject or size > member.file_size or size > _MAX_NPZ_UNPACKED:
+                            raise ValueError('Unsafe array size or object dtype')
+        except (zipfile.BadZipFile, EOFError, TypeError, ValueError) as exc:
+            raise ValueError('Prediction archive is malformed or unsafe') from exc
+
+    def read_prediction_info(self, run_id, relative_path):
+        target = self._safe_file(run_id, relative_path)
+        if target.suffix != '.npz' or not target.name.startswith('prediction_'):
+            raise ValueError('Unsupported prediction archive')
+        self._validate_prediction_archive(target)
+        with np.load(target, allow_pickle=False) as archive:
+            available = [key for key in ('before_rgb', 'predicted_rgb', 'observed_rgb') if key in archive.files]
+            count = int(archive['predicted_rgb'].shape[0]) if 'predicted_rgb' in available else 0
+            result = {'available_images': available, 'frame_count': count, 'artifact': relative_path}
+            for key in ('predicted_state', 'observed_state', 'actions', 'error_bounds',
+                        'episode_id', 'before_step', 'after_step', 'decision_id'):
+                if key in archive.files:
+                    array = np.asarray(archive[key])
+                    if array.size > 16384:
+                        raise ValueError('Prediction metadata is too large')
+                    result[key] = array.tolist()
+        result['aligned'] = all(key in result for key in ('episode_id', 'before_step', 'after_step', 'decision_id'))
+        return result

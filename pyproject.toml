@@ -16,12 +16,17 @@ learning = ["numpy>=1.26,<3", "torch>=2.2", "tqdm>=4.66,<5"]
 visual-world = ["numpy>=1.26,<3", "torch>=2.2", "Pillow>=10", "tqdm>=4.66,<5"]
 visual-data = ["pyarrow>=15", "av>=12"]
 robot-data = ["huggingface_hub>=0.24", "PyYAML>=6"]
+monitor = ["numpy>=1.26,<3"]
 
 [project.scripts]
 wmal-agent = "wmal.agents.cli:run_agent"
 wmal-serve = "wmal.agents.cli:serve"
 wmal-train-neural = "wmal.training.cli:train_neural_cli"
 wmal-visual-world = "wmal.training.visual_cli:main"
+wmal-monitor = "wmal.monitor.server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"wmal.monitor" = ["static/*.html", "static/*.css", "static/*.js"]
