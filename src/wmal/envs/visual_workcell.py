@@ -4,6 +4,7 @@ It exposes two bounded joint target deltas, NOT grasping or humanoid locomotion.
 The controller is fixed and never learns alongside the world model.
 """
 from uuid import uuid4
+import time
 import numpy as np
 
 from wmal.agents.predictive_skill_agent import VisualObservation
@@ -16,7 +17,8 @@ ACTION_SCHEMA='wmal.g1.workcell.target_delta.v1'
 
 
 class VisualWorkcellSession:
-    def __init__(self,task='stack_block',*,image_size=64,camera='workcell_overview',period_s=.2,seed=0):
+    def __init__(self,task='stack_block',*,image_size=64,camera='workcell_overview',period_s=.2,seed=0,
+                 frame_publisher=None,realtime=False):
         import mujoco
         from wmal.envs.workcell import build_workcell
         if image_size not in (32,64,128) or not np.isfinite(period_s) or period_s<=0 or period_s>1:
@@ -36,6 +38,9 @@ class VisualWorkcellSession:
         self._ctrl=self.data.ctrl.copy()
         self.renderer=mujoco.Renderer(self.model,height=image_size,width=image_size)
         self.viewer=None
+        self.frame_publisher=frame_publisher
+        self.monitor_renderer=None
+        self.realtime=bool(realtime)
         self.fault_reason=None
         self.reset()
 
@@ -62,7 +67,22 @@ class VisualWorkcellSession:
             raise RuntimeError('Nonfinite reset state; session remains locked')
         self.episode_id,self.step_id=str(uuid4()),0
         self.fault_reason=None
+        self.publish_monitor_frame()
         return self.observe()
+
+    def publish_monitor_frame(self):
+        """Called only by the physics owner; render failure never alters action execution."""
+        publisher=self.frame_publisher
+        if publisher is None or not publisher.ready():
+            return
+        try:
+            if self.monitor_renderer is None:
+                self.monitor_renderer=self.mj.Renderer(self.model,height=publisher.height,width=publisher.width)
+            self.monitor_renderer.update_scene(self.data,camera=self.camera)
+            publisher.publish(self.monitor_renderer.render(),episode_id=self.episode_id,
+                              step_id=self.step_id,sim_time_s=float(self.data.time))
+        except Exception as exc:
+            publisher.capture_error(exc)
 
     def observe(self):
         self.renderer.update_scene(self.data,camera=self.camera)
@@ -83,13 +103,17 @@ class VisualWorkcellSession:
             raise ValueError('Full committed prefix violates local joint envelope')
         try:
             for target in targets:
+                started=time.monotonic()
                 self.data.ctrl[self.aids]=target
                 self.mj.mj_step(self.model,self.data,nstep=self.physics_steps)
                 if not np.isfinite(self.data.qpos).all() or not np.isfinite(self.data.qvel).all():
                     raise RuntimeError('Nonfinite MuJoCo state; abort this session')
                 self.step_id+=1
+                self.publish_monitor_frame()
                 if self.viewer is not None:
                     self.viewer.sync()
+                if self.realtime:
+                    time.sleep(max(0.,self.period_s-(time.monotonic()-started)))
             return self.observe()
         except (Exception,KeyboardInterrupt):
             self.abort('execution_failed')
@@ -113,6 +137,7 @@ class VisualWorkcellSession:
                 raise
         if self.viewer is not None:
             self.viewer.sync()
+        self.publish_monitor_frame()
 
     def open_viewer(self):
         import mujoco.viewer
@@ -121,6 +146,11 @@ class VisualWorkcellSession:
         return self.viewer
 
     def close(self):
+        if self.frame_publisher is not None:
+            self.frame_publisher.close()
+        if self.monitor_renderer is not None:
+            self.monitor_renderer.close()
+            self.monitor_renderer=None
         if self.viewer is not None:
             self.viewer.close()
             self.viewer=None

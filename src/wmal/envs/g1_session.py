@@ -14,7 +14,7 @@ from wmal.locomotion.contracts import G1State, G1VelocityAction
 class G1MuJoCoSession(AbstractContextManager):
     """Long-lived simulator; task completion never owns or closes this session."""
 
-    def __init__(self, *, viewer=True, realtime=True, scene=None):
+    def __init__(self, *, viewer=True, realtime=True, scene=None, frame_publisher=None):
         try:
             import mujoco
         except ImportError as exc:
@@ -48,6 +48,8 @@ class G1MuJoCoSession(AbstractContextManager):
         self.step_id = 0
         self.realtime = bool(realtime)
         self.closed = False
+        self.frame_publisher = frame_publisher
+        self.monitor_renderer = None
         self.viewer = None
         self.viewer_context = None
         if viewer:
@@ -106,10 +108,32 @@ class G1MuJoCoSession(AbstractContextManager):
             if remaining > 0:
                 time.sleep(remaining)
         state = self.observe()
+        self.publish_monitor_frame()
         if self.scene is not None and not self.scene.segment_free((state.x, state.y), (state.x, state.y)):
             raise RuntimeError('G1 entered obstacle clearance margin')
         if state.pelvis_height < 0.48 or abs(state.roll) > 0.85 or abs(state.pitch) > 0.85:
             raise RuntimeError(f'G1 safety stop at simulation time {self.data.time:.2f}s')
+
+    def publish_monitor_frame(self, force=False):
+        """Render only on the simulator owner thread into a bounded read-only sink."""
+        publisher = self.frame_publisher
+        if publisher is None or not publisher.ready(force):
+            return
+        try:
+            if self.monitor_renderer is None:
+                self.monitor_renderer = self.mj.Renderer(self.model, height=publisher.height, width=publisher.width)
+            camera = self.mj.MjvCamera()
+            camera.type = self.mj.mjtCamera.mjCAMERA_FREE
+            camera.lookat[:] = self.data.qpos[:3]
+            camera.distance, camera.azimuth, camera.elevation = 3.2, 135, -18
+            if self.scene is not None:
+                camera.distance, camera.elevation = 9., -65
+                camera.lookat[:] = [2., 0., .3]
+            self.monitor_renderer.update_scene(self.data, camera=camera)
+            publisher.publish(self.monitor_renderer.render(), episode_id=self.episode_id,
+                              step_id=self.step_id, sim_time_s=float(self.data.time), force=force)
+        except Exception as exc:
+            publisher.capture_error(exc)
 
     def _contacts(self):
         touching = []
@@ -162,6 +186,7 @@ class G1MuJoCoSession(AbstractContextManager):
             self._control_interval()
         # Agent-visible step IDs count completed action chunks, not 20ms policy ticks.
         self.step_id += 1
+        self.publish_monitor_frame(force=True)
         return self.observe()
 
     def set_goal_marker(self, goal):
@@ -174,6 +199,11 @@ class G1MuJoCoSession(AbstractContextManager):
         if self.closed:
             return
         self.closed = True
+        if self.frame_publisher is not None:
+            self.frame_publisher.close()
+        if self.monitor_renderer is not None:
+            self.monitor_renderer.close()
+            self.monitor_renderer = None
         if self.viewer_context is not None:
             try:
                 self.viewer_context.__exit__(None, None, None)

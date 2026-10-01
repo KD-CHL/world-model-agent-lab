@@ -1,5 +1,6 @@
 """Persistent interactive G1 MuJoCo Agent with an explicit world-model plugin."""
 import argparse
+from contextlib import ExitStack
 import json
 import math
 from pathlib import Path
@@ -9,6 +10,7 @@ from wmal.locomotion.contracts import G1_POLICY_PERIOD_S, G1Goal
 from wmal.locomotion.planner import G1RolloutPlanner
 from wmal.locomotion.world_model import load_world_model
 from wmal.logging.events import EventLog
+from wmal.logging.manifest import atomic_json, build_manifest
 
 
 def validate_experiment_config(config):
@@ -125,7 +127,14 @@ def main(argv=None):
     parser.add_argument('--log', help='Override JSONL experiment log path')
     parser.add_argument('--goal', help='Run one world-frame goal, e.g. "4 0", then exit')
     parser.add_argument('--headless', action='store_true', help='Disable viewer and wall-clock pacing')
+    parser.add_argument('--monitor', action='store_true', help='Enable local read-only experiment dashboard')
+    parser.add_argument('--monitor-port', type=int, default=8765)
+    parser.add_argument('--monitor-runs-root', default='runs')
+    parser.add_argument('--monitor-keep-open', action='store_true',
+                        help='After --goal, close physics but keep dashboard until Ctrl+C')
     args = parser.parse_args(argv)
+    if args.monitor_keep_open and not (args.monitor and args.goal):
+        parser.error('--monitor-keep-open requires --monitor and --goal')
     try:
         config = validate_experiment_config(json.loads(Path(args.config).read_text(encoding='utf-8')))
         world_model_config = config['world_model']
@@ -143,9 +152,10 @@ def main(argv=None):
         agent_config = config.get('agent', {})
         from wmal.locomotion.feedback import ResidualFeedback
         feedback = ResidualFeedback(**config['feedback']) if 'feedback' in config else None
+        log_path = Path(args.log or config.get('log_path', 'runs/g1_agent/events.jsonl'))
         agent = G1Agent(planner, max_tilt_rad=agent_config.get('max_tilt_rad', 0.65),
                         min_pelvis_height_m=agent_config.get('min_pelvis_height_m', 0.48),
-                        log=EventLog(args.log or config.get('log_path', 'runs/g1_agent/events.jsonl')),
+                        log=EventLog(log_path),
                         feedback=feedback)
         from wmal.envs.g1_session import G1MuJoCoSession
         simulator = config.get('simulator', {})
@@ -157,22 +167,43 @@ def main(argv=None):
             agent.planner = NavigationPlanner(planner, scene, agent.log)
         elif simulator.get('scene') is not None:
             raise ValueError('Unknown simulator scene')
-        with G1MuJoCoSession(viewer=False if args.headless else simulator.get('viewer', True),
-                             realtime=False if args.headless else simulator.get('realtime', True), scene=scene) as session:
+        with ExitStack() as stack:
+            monitor = None
+            if args.monitor:
+                from wmal.monitor.runtime import MonitorRuntime
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_json(log_path.parent / 'run_manifest.json', build_manifest(
+                    'g1_agent', settings.get('seed', 0), {'experiment_config': args.config},
+                    parameters={'goal': args.goal, 'headless': args.headless}, model_version=model.version))
+                monitor = stack.enter_context(MonitorRuntime(log_path.parent, args.monitor_runs_root,
+                                                             args.monitor_port, camera='g1_overview'))
+                print(f'Agent monitor: {monitor.url}', flush=True)
+            with G1MuJoCoSession(viewer=False if args.headless else simulator.get('viewer', True),
+                                 realtime=False if args.headless else simulator.get('realtime', True), scene=scene,
+                                 frame_publisher=monitor.publisher if monitor else None) as session:
+                if args.goal:
+                    goal = parse_goal(args.goal)
+                    if goal is None:
+                        raise ValueError('--goal requires coordinates')
+                    session.set_goal_marker(goal)
+                    result = agent.run_goal(goal, session, max_cycles=agent_config.get('max_cycles_per_goal', 100))
+                    summary = {'status': result.status, 'cycles': result.cycles, 'detail': result.detail,
+                               'final_state': result.final_state.__dict__ if result.final_state else None}
+                    agent.log('goal_result', summary)
+                    print(json.dumps(summary), flush=True)
+                else:
+                    interactive_loop(agent, session,
+                                     max_cycles=agent_config.get('max_cycles_per_goal', 100),
+                                     log_path=agent.log)
+            if args.monitor_keep_open:
+                print('Simulation stopped; dashboard retains the last frame. Ctrl+C to exit.', flush=True)
+                try:
+                    while not monitor.server.stopping.wait(.5):
+                        pass
+                except KeyboardInterrupt:
+                    pass
             if args.goal:
-                goal = parse_goal(args.goal)
-                if goal is None:
-                    raise ValueError('--goal requires coordinates')
-                session.set_goal_marker(goal)
-                result = agent.run_goal(goal, session, max_cycles=agent_config.get('max_cycles_per_goal', 100))
-                summary = {'status': result.status, 'cycles': result.cycles, 'detail': result.detail,
-                           'final_state': result.final_state.__dict__ if result.final_state else None}
-                agent.log('goal_result', summary)
-                print(json.dumps(summary))
                 return 0 if result.status == 'succeeded' else 1
-            interactive_loop(agent, session,
-                             max_cycles=agent_config.get('max_cycles_per_goal', 100),
-                             log_path=agent.log)
         return 0
     except (ImportError, OSError, json.JSONDecodeError, TypeError, ValueError, RuntimeError) as exc:
         parser.exit(2, f'G1 Agent startup/session failed: {type(exc).__name__}: {exc}\n')

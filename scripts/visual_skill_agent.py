@@ -2,6 +2,8 @@
 """Keep the G1 viewer alive after bounded research tasks; no LLM/controller training."""
 import argparse
 from dataclasses import asdict
+from datetime import datetime, timezone
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import select
@@ -12,7 +14,7 @@ import numpy as np
 
 from wmal.agents.predictive_skill_agent import AgentTask, PredictiveSkillAgent, SkillCandidate
 from wmal.envs.visual_workcell import VisualWorkcellSession, TARGET_LOW, TARGET_HIGH, MAX_DELTA
-from wmal.logging.manifest import atomic_json
+from wmal.logging.manifest import atomic_json, build_manifest
 from wmal.models.horizon_calibration import HorizonCalibration
 from wmal.models.visual_latent import VisualWorldModel
 
@@ -59,6 +61,16 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
             state_upper=np.concatenate([TARGET_HIGH+.15,TARGET_HIGH]))
     rng=np.random.default_rng(seed)
     observed=session.observe()
+    def emit(event,payload):
+        record={'event':event,'wall_time_utc':datetime.now(timezone.utc).isoformat(),
+                'task_id':task.task_id,'episode_id':observed.episode_id,'step_id':observed.step_id,
+                'sim_time_s':float(session.data.time),**payload}
+        log.write(json.dumps(record,ensure_ascii=False,allow_nan=False)+'\n')
+        log.flush()
+    emit('task_started',{'schema':'wmal.monitor.task.v1','goal':state_goal.tolist(),
+                        'baseline':baseline,'max_cycles':max_cycles,'callable_skills':list(task.callable_skills),
+                        'model_version':model.version,'semantics':session.semantics})
+    emit('agent_state',{'state':asdict(agent.state)})
     frozen=fixed_joint_plan(observed.state[2:],goal,max_cycles) if baseline=='A0' else None
     started=time.perf_counter()
     reobservations=0
@@ -71,11 +83,14 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
         else:
             available=candidates(observed,state_goal,horizon,rng)
         decision=agent.plan(observed,available)
-        record={'event':'plan','cycle':cycle,'episode_id':observed.episode_id,'step_id':observed.step_id,
+        record={'cycle':cycle,'episode_id':observed.episode_id,'step_id':observed.step_id,
                 'decision_id':decision.decision_id,'status':decision.status,'prefix_length':decision.prefix_length,
-                'actions':decision.actions.tolist(),'model_version':decision.model_version,'evidence':decision.evidence}
-        log.write(json.dumps(record,allow_nan=False)+'\n')
-        log.flush()
+                'skill':decision.skill,'actions':decision.actions.tolist(),'model_version':decision.model_version,
+                'evidence':decision.evidence,'predicted_states':None if decision.predicted_states is None else decision.predicted_states.tolist(),
+                'error_bounds':None if decision.error_bounds is None else decision.error_bounds.tolist(),
+                'uncertainty_kind':'calibrated_error_bound' if decision.error_bounds is not None else 'unavailable'}
+        emit('plan',record)
+        emit('agent_state',{'state':asdict(agent.state)})
         if decision.prefix_length==0:
             reobservations+=1
             if reobservations>=3:
@@ -85,29 +100,38 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
             continue
         reobservations=0
         before=observed
+        emit('execution_started',{'decision_id':decision.decision_id,'skill':decision.skill,
+                                  'prefix_length':decision.prefix_length,'actions':decision.actions.tolist()})
         try:
             observed=session.execute_actions(decision.actions,episode_id=decision.episode_id,step_id=decision.step_id)
         except (ValueError,RuntimeError):
             session.abort('controller_rejected_or_failed')
             observed=session.observe()
             agent.record_execution_failure(decision,observed,'controller_rejected_or_failed')
-            log.write(json.dumps({'event':'execution_failed','step_id':observed.step_id,
-                                 'decision_id':decision.decision_id},allow_nan=False)+'\n')
+            emit('execution_failed',{'decision_id':decision.decision_id,'reason':'controller_rejected_or_failed',
+                                     'state':asdict(agent.state)})
             break
         feedback=agent.record_feedback(decision,observed)
-        log.write(json.dumps({'event':'feedback',**feedback},allow_nan=False)+'\n')
-        log.flush()
         # Concrete RGB evidence makes prediction/observation alignment inspectable.
         if decision.predicted_frames is not None:
-            np.savez_compressed(artifact_dir/f'prediction_{seed}_{cycle:04d}.npz',
+            artifact=f'prediction_{seed}_{cycle:04d}.npz'
+            arrays=dict(
                 before_rgb=before.rgb,actions=decision.actions,predicted_rgb=decision.predicted_frames[:decision.prefix_length],
                 observed_rgb=observed.rgb,predicted_state=decision.predicted_states[:decision.prefix_length],
-                observed_state=observed.state)
+                observed_state=observed.state,episode_id=np.array(observed.episode_id),
+                before_step=np.array(before.step_id),after_step=np.array(observed.step_id),
+                decision_id=np.array(decision.decision_id))
+            if decision.error_bounds is not None:
+                arrays['error_bounds']=decision.error_bounds[:decision.prefix_length]
+            np.savez_compressed(artifact_dir/artifact,**arrays)
+            feedback['artifact']=artifact
+        emit('feedback',feedback)
+        emit('observation',{'observed_state':observed.state.tolist(),'state_order':session.semantics['state_order']})
+        emit('agent_state',{'state':asdict(agent.state)})
     result={'baseline':baseline,'seed':seed,'elapsed_s':time.perf_counter()-started,
             'model_version':model.version,'state':asdict(agent.state),
             'goal_error_rad':float(np.linalg.norm(observed.state-state_goal))}
-    log.write(json.dumps({'event':'task_result',**result},allow_nan=False)+'\n')
-    log.flush()
+    emit('task_result',result)
     return result
 
 
@@ -125,6 +149,10 @@ def main():
     parser.add_argument('--device',default='cpu')
     parser.add_argument('--output',required=True)
     parser.add_argument('--viewer',action='store_true')
+    parser.add_argument('--monitor',action='store_true',help='Serve a persistent read-only browser monitor')
+    parser.add_argument('--monitor-port',type=int,default=8765)
+    parser.add_argument('--monitor-runs-root',default='runs')
+    parser.add_argument('--realtime',action='store_true',help='Pace action execution at simulation time')
     args=parser.parse_args()
     import torch
     torch.set_num_threads(1)
@@ -138,9 +166,24 @@ def main():
     if output.exists() and any(output.iterdir()):
         parser.error('Output directory must be new/empty')
     output.mkdir(parents=True,exist_ok=True)
+    inputs={'checkpoint':args.checkpoint} if Path(args.checkpoint).is_file() else {}
+    if args.calibration:
+        inputs['calibration']=args.calibration
+    atomic_json(output/'run_manifest.json',build_manifest('visual_skill_agent',args.seed,inputs,
+                parameters={'task':args.task,'goal':args.goal,'baseline':args.baseline,'max_cycles':args.max_cycles,
+                            'horizon':args.horizon,'error_budget':args.error_budget,'realtime':args.realtime},
+                semantics=model.semantics,model_version=model.version))
     try:
-        with VisualWorkcellSession(args.task,image_size=model.config.image_size,
-                                  camera=model.semantics['camera'],period_s=model.semantics['period_s'],seed=args.seed) as session:
+        with ExitStack() as stack:
+            monitor=None
+            if args.monitor:
+                from wmal.monitor.runtime import MonitorRuntime
+                monitor=stack.enter_context(MonitorRuntime(output,args.monitor_runs_root,args.monitor_port,
+                                                           camera=model.semantics['camera']))
+                print(f'Agent monitor: {monitor.url}',flush=True)
+            session=stack.enter_context(VisualWorkcellSession(args.task,image_size=model.config.image_size,
+                         camera=model.semantics['camera'],period_s=model.semantics['period_s'],seed=args.seed,
+                         frame_publisher=monitor.publisher if monitor else None,realtime=args.realtime))
             if session.semantics!=model.semantics:
                 raise ValueError('Model was trained with different robot/camera/action coordinates')
             viewer=session.open_viewer() if args.viewer else None
@@ -153,18 +196,21 @@ def main():
                         log=log,artifact_dir=output)
                     atomic_json(output/f'task_{task_index:03d}.json',report)
                     print(json.dumps(report,ensure_ascii=False,indent=2),flush=True)
-                    if viewer is None:
+                    if viewer is None and monitor is None:
                         break
-                    print('窗口保持打开。输入 shoulder elbow 开始新目标，reset 显式重置故障会话，quit 退出。',flush=True)
+                    print('观测会话保持打开。输入 shoulder elbow 开始新目标，reset 显式重置故障会话，quit 退出。',flush=True)
                     goal=None
-                    while viewer.is_running():
+                    while viewer is None or viewer.is_running():
                         # Hold the last command; do not run unbudgeted Agent actions.
-                        session.idle()
+                        if viewer is not None:
+                            session.idle()
+                        else:
+                            session.publish_monitor_frame()
                         if stdin_active and sys.stdin in select.select([sys.stdin],[],[],0)[0]:
                             line=sys.stdin.readline()
                             if not line:
                                 stdin_active=False
-                                print('终端输入已结束；窗口保持打开，可关闭窗口退出。',flush=True)
+                                print('终端输入已结束；观测会话保持打开，Ctrl+C 或关闭 MuJoCo 窗口退出。',flush=True)
                                 continue
                             line=line.strip()
                             if line in ('quit','exit'):
