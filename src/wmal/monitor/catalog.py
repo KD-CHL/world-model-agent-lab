@@ -1,0 +1,189 @@
+"""Safe, read-only discovery and preview of experiment artifacts."""
+from hashlib import sha256
+import json
+import os
+from pathlib import Path, PurePosixPath
+import struct
+import zlib
+import zipfile
+
+import numpy as np
+
+
+_MAX_JSON_BYTES = 5 * 1024 * 1024
+_MAX_NPZ_BYTES = 32 * 1024 * 1024
+_MAX_NPZ_UNPACKED = 64 * 1024 * 1024
+_MAX_FRAME_PIXELS = 2048 * 2048
+_ROOT_MARKERS = {'events.jsonl', 'run_manifest.json', 'manifest.json',
+                 'training_report.json', 'history.json', 'results.json'}
+
+
+def _is_artifact_name(name):
+    return (name in _ROOT_MARKERS or
+            (name.startswith('task_') and name.endswith('.json')) or
+            (name.startswith('prediction_') and name.endswith('.npz')) or
+            (name.lower().endswith(('.png', '.jpg', '.jpeg')) and not name.startswith('.')))
+
+
+def _png_chunk(kind, content):
+    payload = kind + content
+    return struct.pack('>I', len(content)) + payload + struct.pack('>I', zlib.crc32(payload) & 0xffffffff)
+
+
+def _encode_png(rgb):
+    height, width, _ = rgb.shape
+    header = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    scanlines = b''.join(b'\x00' + row.tobytes() for row in rgb)
+    return (b'\x89PNG\r\n\x1a\n' + _png_chunk(b'IHDR', header)
+            + _png_chunk(b'IDAT', zlib.compress(scanlines, level=3))
+            + _png_chunk(b'IEND', b''))
+
+
+class RunCatalog:
+    def __init__(self, runs_root):
+        root = Path(runs_root).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            raise ValueError('runs_root must be an existing directory')
+        self.root = root
+        self._runs = {}
+
+    def _relative(self, directory):
+        value = directory.relative_to(self.root).as_posix()
+        return value or '.'
+
+    def _run_id(self, relative):
+        return sha256(relative.encode('utf-8')).hexdigest()[:20]
+
+    def list_runs(self):
+        found = {}
+        for directory, subdirs, files in os.walk(self.root, followlinks=False):
+            base = Path(directory)
+            subdirs[:] = [name for name in subdirs
+                          if not (base / name).is_symlink() and not name.startswith('.')]
+            names = {name for name in files if not (base / name).is_symlink()}
+            if not (names & _ROOT_MARKERS or
+                    any(name.startswith(('task_', 'prediction_')) for name in names)):
+                continue
+            relative = self._relative(base)
+            run_id = self._run_id(relative)
+            manifest = {}
+            manifest_path = base / 'run_manifest.json'
+            if manifest_path.is_file() and manifest_path.stat().st_size <= _MAX_JSON_BYTES:
+                try:
+                    value = json.loads(manifest_path.read_text(encoding='utf-8'))
+                    if isinstance(value, dict):
+                        manifest = value
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+            found[run_id] = {'run_id': run_id, 'run_path': relative,
+                             'run_kind': manifest.get('run_kind', manifest.get('kind')),
+                             'started_at_utc': manifest.get('created_at_utc'),
+                             'git_commit': manifest.get('git_commit'),
+                             'git_dirty': manifest.get('git_dirty'),
+                             'seed': manifest.get('seed'), 'manifest': manifest}
+        self._runs = found
+        return sorted(found.values(), key=lambda row: (row.get('started_at_utc') or '', row['run_path']))
+
+    def resolve_run(self, run_id):
+        if run_id not in self._runs:
+            self.list_runs()
+        if run_id not in self._runs:
+            raise KeyError('Unknown run id')
+        path = (self.root / self._runs[run_id]['run_path']).resolve()
+        if not path.is_relative_to(self.root) or not path.is_dir():
+            raise ValueError('Run path escaped the configured root')
+        return path
+
+    def _safe_file(self, run_id, relative_path):
+        if not isinstance(relative_path, str) or '\x00' in relative_path or '\\' in relative_path:
+            raise ValueError('Invalid artifact path')
+        path_value = PurePosixPath(relative_path)
+        if path_value.is_absolute() or not path_value.parts or any(part in ('..', '.') for part in path_value.parts):
+            raise ValueError('Invalid artifact path')
+        run = self.resolve_run(run_id)
+        candidate = run
+        for part in path_value.parts:
+            candidate = candidate / part
+            if candidate.is_symlink():
+                raise ValueError('Symbolic-link artifacts are not served')
+        target = candidate.resolve()
+        if not target.is_relative_to(run) or not target.is_file():
+            raise ValueError('Artifact path is outside the run or is not a regular file')
+        if not _is_artifact_name(target.name):
+            raise ValueError('Unsupported artifact type')
+        return target
+
+    def list_artifacts(self, run_id):
+        run = self.resolve_run(run_id)
+        rows = []
+        for path in run.iterdir():
+            if path.is_symlink() or not path.is_file() or not _is_artifact_name(path.name):
+                continue
+            suffix = path.suffix.lower()
+            kind = ('events' if path.name == 'events.jsonl' else
+                    'manifest' if path.name in ('run_manifest.json', 'manifest.json') else
+                    'prediction' if suffix == '.npz' else
+                    'image' if suffix in ('.png', '.jpg', '.jpeg') else 'json')
+            info = path.stat()
+            rows.append({'relative_path': path.name, 'kind': kind, 'size_bytes': info.st_size,
+                         'modified_time': info.st_mtime})
+        return sorted(rows, key=lambda row: row['relative_path'])
+
+    def read_json_artifact(self, run_id, relative_path):
+        target = self._safe_file(run_id, relative_path)
+        if target.suffix.lower() != '.json' or target.stat().st_size > _MAX_JSON_BYTES:
+            raise ValueError('Artifact is not a supported-size JSON file')
+        try:
+            value = json.loads(target.read_text(encoding='utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError('Artifact contains invalid JSON') from exc
+        if not isinstance(value, dict):
+            raise ValueError('JSON artifact must contain an object')
+        return value
+
+    def read_prediction_frame(self, run_id, relative_path, index=0, key='predicted_rgb'):
+        target = self._safe_file(run_id, relative_path)
+        if target.suffix.lower() != '.npz' or not target.name.startswith('prediction_'):
+            raise ValueError('Artifact is not a supported prediction archive')
+        if type(index) is not int or index < 0 or key not in ('predicted_rgb', 'before_rgb', 'observed_rgb'):
+            raise ValueError('Invalid prediction image selector')
+        if target.stat().st_size > _MAX_NPZ_BYTES:
+            raise ValueError('Prediction archive exceeds the byte limit')
+        try:
+            with zipfile.ZipFile(target) as archive:
+                members = archive.infolist()
+                if (len(members) > 32 or sum(member.file_size for member in members) > _MAX_NPZ_UNPACKED
+                        or any(PurePosixPath(member.filename).is_absolute()
+                               or '..' in PurePosixPath(member.filename).parts for member in members)):
+                    raise ValueError('Prediction archive contains unsafe members')
+            with np.load(target, allow_pickle=False) as archive:
+                if key not in archive.files:
+                    raise ValueError(f'Prediction image key {key!r} is unavailable')
+                frames = np.asarray(archive[key])
+        except (OSError, zipfile.BadZipFile, ValueError) as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith(('Prediction archive', 'Prediction image')):
+                raise
+            raise ValueError('Unable to safely read prediction archive') from exc
+        if frames.dtype.kind not in ('u', 'i', 'f') or not frames.size:
+            raise ValueError('Prediction image array must be numeric and nonempty')
+        if frames.ndim == 3:
+            selected = frames
+            if index != 0:
+                raise ValueError('Single-frame image index must be zero')
+        elif frames.ndim == 4:
+            if index >= frames.shape[0]:
+                raise ValueError('Prediction frame index is out of range')
+            selected = frames[index]
+        else:
+            raise ValueError('Prediction image must be CHW/HWC or TCHW/THWC')
+        if selected.shape[0] == 3:
+            selected = selected.transpose(1, 2, 0)
+        if (selected.ndim != 3 or selected.shape[2] != 3
+                or selected.shape[0] * selected.shape[1] > _MAX_FRAME_PIXELS):
+            raise ValueError('Prediction frame has unsupported image dimensions')
+        selected = selected.astype(np.float32, copy=False)
+        if not np.isfinite(selected).all() or selected.min() < 0 or selected.max() > 255:
+            raise ValueError('Prediction frame contains invalid pixel values')
+        if selected.max(initial=0) <= 1:
+            selected = selected * 255
+        return _encode_png(np.rint(selected).astype(np.uint8))
