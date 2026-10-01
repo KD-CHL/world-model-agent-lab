@@ -121,3 +121,6 @@ latent memory、完整 Dreamer 策略、物理抓取和真机安全未实施，�
 
 修复后全量重新验证：183 项，182 通过，1 项 ROS 2 跳过；无失败。
 定向新网络/Agent/旧网络测试25项通过。旧实际 checkpoint 版本仍保持一致。
+额外复跑真实 MuJoCo A2（max-cycles4）至
+`runs/rssm_g1_receipt_smoke_20261002`：新私有回执链实际执行4步并接收对齐
+反馈，正常 budget_exhausted；仍未完成 waypoint，不扩大成功声明。

@@ -33,10 +33,10 @@ Agent 只维护任务和观测证据，不训练控制器；旧确定性网络�
 
 **Interfaces:** `CategoricalRSSMMember(config)` produces `observe(rgb[B,T,3,S,S],states[B,T,D],actions[B,T-1,A],is_first=None,sample=False)` posterior/prior/features/reconstruction and `imagine(rgb[B,3,S,S],state[B,D],actions[B,H,A])` rgb/state/diagnostics. `make_member(config)` chooses implementation; `NetworkConfig` owns architecture/stoch/classes/unimix. Existing `VisualWorldModel.predict/save/load` remain compatible.
 
-- [ ] Write tests: `test_prior_actions_and_future_posterior_are_separate`, `test_reset_masks_state_and_incoming_action`, `test_balanced_kl_gradient_paths`, `test_old_checkpoint_and_rssm_roundtrip`.
-- [ ] Run `PYTHONPATH=src:tests /home/chl/miniconda3/envs/wmal/bin/python -m unittest test_categorical_rssm -v`; Expected: missing capability FAIL.
-- [ ] Implement categorical probabilities, straight-through sample, independent prior/posterior, reset, symlog state head, RGB decoder and loss helpers; preserve old config hash by omitting new fields for deterministic.
-- [ ] Run same tests; Expected: PASS; commit network implementation.
+- [x] Write tests: `test_prior_actions_and_future_posterior_are_separate`, `test_reset_masks_state_and_incoming_action`, `test_balanced_kl_gradient_paths`, `test_old_checkpoint_and_rssm_roundtrip`.
+- [x] Run `PYTHONPATH=src:tests /home/chl/miniconda3/envs/wmal/bin/python -m unittest test_categorical_rssm -v`; Expected: missing capability FAIL.
+- [x] Implement categorical probabilities, straight-through sample, independent prior/posterior, reset, symlog state head, RGB decoder and loss helpers; preserve old config hash by omitting new fields for deterministic.
+- [x] Run same tests; Expected: PASS; commit network implementation.
 
 ### Task 2: 训练/微调/评估完整接入
 
@@ -44,10 +44,10 @@ Agent 只维护任务和观测证据，不训练控制器；旧确定性网络�
 
 **Interfaces:** `VisualTrainingConfig` accepts architecture, stoch, classes, unimix, dyn_weight, rep_weight, free_nats, reconstruction_weight; `batch_loss` chooses RSSM loss or legacy unchanged loss. Existing CLI/config/calibration/evaluate remain shared.
 
-- [ ] Write `test_training_finetune_calibration_and_test_isolation`, including checkpoint unchanged after test-file mutation and frozen RGB/state encoders.
-- [ ] Run focused test; Expected: config arguments not accepted FAIL.
-- [ ] Add recurrent posterior reconstruction/KL and prior-only open-loop losses; validation loss components include KL/entropy, deterministic validation; preserve lineage and semantics.
-- [ ] Run network + legacy tests; Expected: PASS; commit training integration.
+- [x] Write `test_training_finetune_calibration_and_test_isolation`, including checkpoint unchanged after test-file mutation and frozen RGB/state encoders.
+- [x] Run focused test; Expected: config arguments not accepted FAIL.
+- [x] Add recurrent posterior reconstruction/KL and prior-only open-loop losses; validation loss components include KL/entropy, deterministic validation; preserve lineage and semantics.
+- [x] Run network + legacy tests; Expected: PASS; commit training integration.
 
 ### Task 3: 可审计调度与实际多子目标入口
 
@@ -55,10 +55,10 @@ Agent 只维护任务和观测证据，不训练控制器；旧确定性网络�
 
 **Interfaces:** `PredictiveSkillAgent.active_stage`, `max_reobservations=3`, defensive array snapshots, identity-bound pending receipts, new state fields/diagnostics. `run_task(...,waypoints=())` uses active_stage; CLI `--waypoints shoulder elbow ...` sequential targets, final --goal remains last.
 
-- [ ] Write tests: finite reobserve budget, real-feedback-only multi-stage advancement, source arrays cannot mutate receipt, forged receipt rejected, RSSM diagnostics retained, run_task stage-target integration.
-- [ ] Run focused tests; Expected: missing budget/stage capability FAIL.
-- [ ] Implement state/evidence changes and waypoint CLI with validation; A0 multi-stage uses one-step fixed sequence to avoid silently skipping intermediate goals.
-- [ ] Run Agent + legacy tests; Expected: PASS; commit integration.
+- [x] Write tests: finite reobserve budget, real-feedback-only multi-stage advancement, source arrays cannot mutate receipt, forged receipt rejected, RSSM diagnostics retained, run_task stage-target integration.
+- [x] Run focused tests; Expected: missing budget/stage capability FAIL.
+- [x] Implement state/evidence changes and waypoint CLI with validation; A0 multi-stage uses one-step fixed sequence to avoid silently skipping intermediate goals.
+- [x] Run Agent + legacy tests; Expected: PASS; commit integration.
 
 ### Task 4: 真实数据验收与用户文档
 
@@ -66,8 +66,8 @@ Agent 只维护任务和观测证据，不训练控制器；旧确定性网络�
 
 **Interfaces:** Existing CLI trains/calibrates/evaluates RSSM and launches persistent viewer/monitor; run outputs remain git-ignored.
 
-- [ ] Run full unittest suite with `MUJOCO_GL=egl PYTHONPATH=src`; Expected: no failures, optional unavailable ROS test explicitly skipped.
-- [ ] Use existing local MuJoCo visual manifest to train short RSSM run and freeze-encoder fine-tune; calibrate and evaluate disjoint sets. Expected: finite reports and distinct bound versions; record all commands/results.
-- [ ] Launch bounded actual MuJoCo waypoint Agent run; Expected: genuine prediction/execution evidence, report success or refusal honestly, no guaranteed task success from smoke weights.
-- [ ] Write source citations, training/finetune/calibration/launch commands, model boundary and experiment roadmap; commit docs after verification.
-- [ ] Independent review entire change, regression-test important findings, rerun suite and record outcome.
+- [x] Run full unittest suite with `MUJOCO_GL=egl PYTHONPATH=src`; Expected: no failures, optional unavailable ROS test explicitly skipped.
+- [x] Use existing local MuJoCo visual manifest to train short RSSM run and freeze-encoder fine-tune; calibrate and evaluate disjoint sets. Expected: finite reports and distinct bound versions; record all commands/results.
+- [x] Launch bounded actual MuJoCo waypoint Agent run; Expected: genuine prediction/execution evidence, report success or refusal honestly, no guaranteed task success from smoke weights.
+- [x] Write source citations, training/finetune/calibration/launch commands, model boundary and experiment roadmap; commit docs after verification.
+- [x] Independent review entire change, regression-test important findings, rerun suite and record outcome.
