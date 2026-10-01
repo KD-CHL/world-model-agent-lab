@@ -3,7 +3,8 @@
 A0 fixed candidate, A1 nominal feedback correction, A2 learned consequence
 ranking, A3 calibrated execution prefixes. Only real feedback completes goals.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from copy import deepcopy
 import math
 import time
 from uuid import uuid4
@@ -161,6 +162,7 @@ class PredictiveSkillAgent:
         self.state=ResearchAgentState(np.asarray(task.goal).tolist(),list(task.callable_skills))
         self.state.active_subgoal=self._target().name
         self._pending=None
+        self._pending_payload=None
         self._episode=None
         self._step=None
         self._force_reobserve=False
@@ -273,12 +275,27 @@ class PredictiveSkillAgent:
                  'world_model_diagnostics':diagnostics,
                  'trust_mechanism':'held_out_calibrated_error_bound' if bounds is not None else 'not_calibrated'})
         self._pending=decision
+        self._pending_payload=replace(decision,evidence=deepcopy(decision.evidence))
         self.state.failure_reason=None
         return decision
 
+    def _receipt(self,decision):
+        """Public ndarray headers are mutable even when their bytes aren't."""
+        if decision is not self._pending or self._pending_payload is None:
+            raise ValueError('Receipt is not the pending authoritative decision')
+        expected=self._pending_payload
+        for name in ('actions','predicted_states','predicted_frames','error_bounds'):
+            public,private=getattr(decision,name),getattr(expected,name)
+            if (public is None)!=(private is None):
+                raise ValueError('Execution receipt payload changed')
+            if public is not None and (public.dtype!=private.dtype or public.shape!=private.shape
+                                      or public.tobytes()!=private.tobytes()):
+                raise ValueError('Execution receipt array metadata/content changed')
+        return expected
+
     def record_feedback(self,decision,observation):
-        if (decision is not self._pending or self._pending is None
-                or decision.model_version!=self.predictor.version or observation.episode_id!=decision.episode_id
+        decision=self._receipt(decision)
+        if (decision.model_version!=self.predictor.version or observation.episode_id!=decision.episode_id
                 or observation.step_id!=decision.step_id+decision.prefix_length
                 or np.asarray(observation.state).shape!=np.asarray(self.task.goal).shape):
             raise ValueError('Feedback is stale, duplicated, incomplete or from another episode/model')
@@ -302,6 +319,7 @@ class PredictiveSkillAgent:
         self.state.reobservations=0
         self.state.recent_feedback=feedback
         self._pending=None
+        self._pending_payload=None
         self._step=observation.step_id
         self._update_belief(observation)
         self.state.belief.update(last_prediction_error=feedback.get('state_error'),
@@ -319,8 +337,8 @@ class PredictiveSkillAgent:
 
     def record_execution_failure(self,decision,observation,reason):
         """Known partial receipt: account real progress, stop; never retry uncertain actions."""
-        if (decision is not self._pending or self._pending is None
-                or observation.episode_id!=decision.episode_id
+        decision=self._receipt(decision)
+        if (observation.episode_id!=decision.episode_id
                 or not decision.step_id<=observation.step_id<=decision.step_id+decision.prefix_length
                 or not isinstance(reason,str) or not reason):
             raise ValueError('Invalid execution failure receipt')
@@ -332,5 +350,6 @@ class PredictiveSkillAgent:
                                     'observed_state':np.asarray(observation.state).tolist(),
                                     'status':'execution_failed','reason':reason}
         self._pending=None
+        self._pending_payload=None
         self._step=observation.step_id
         self._update_belief(observation)

@@ -122,6 +122,15 @@ class VisualWorldModel:
         self.config,self.semantics,self.normalization=config,dict(semantics),normalization
         self.members=[member.to(device).eval() for member in members]
         self.device,self.metadata=device,metadata or {}
+        masks=self.metadata.get('event_supervised_by_member')
+        if masks is None:
+            # Legacy declaration of an event dimension is not evidence of labels.
+            masks=[[False]*config.event_dim for _ in members]
+        if (not isinstance(masks,list) or len(masks)!=len(members)
+                or any(not isinstance(row,list) or len(row)!=config.event_dim
+                       or any(type(value) is not bool for value in row) for row in masks)):
+            raise ValueError('Invalid per-member event supervision evidence')
+        self.event_supervised_channels=np.asarray(masks,dtype=bool).all(0)
         self.version=_version(config,semantics,normalization,[m.state_dict() for m in members])
 
     def predict(self, rgb, state, actions):
@@ -145,8 +154,8 @@ class VisualWorldModel:
                 output=member.imagine(*inputs)
                 states.append(output['state'][0].cpu().numpy()*norm['state_scale']+norm['state_mean'])
                 frames.append(output['rgb'][0].cpu().numpy())
-                if output['event_logits'] is not None:
-                    events.append(output['event_logits'][0].sigmoid().cpu().numpy())
+                if output['event_logits'] is not None and self.event_supervised_channels.any():
+                    events.append(output['event_logits'][0].sigmoid().cpu().numpy()[:,self.event_supervised_channels])
                 if 'prior_entropy' in output:
                     diagnostics.append({'prior_entropy':output['prior_entropy'][0].cpu().tolist(),
                                         'posterior_entropy':float(output['posterior_entropy'][0])})
@@ -154,6 +163,8 @@ class VisualWorldModel:
             raise RuntimeError('Nonfinite world-model prediction; refuse candidate')
         return {'model_version':self.version,'states':np.stack(states),'frames':np.stack(frames),
                 'event_probabilities':np.stack(events) if events else None,
+                'event_probability_names':[name for name,enabled in
+                    zip(self.semantics.get('event_names',[]),self.event_supervised_channels) if enabled],
                 'diagnostics':{'architecture':self.config.architecture,
                                'inference_mode':'categorical_probability_proxy' if diagnostics else 'deterministic',
                                'uncertainty_kind':'ensemble_spread_not_calibrated',

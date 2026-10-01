@@ -87,6 +87,25 @@ class AgentRSSMIntegrationTests(unittest.TestCase):
         agent.record_feedback(receipt, observation(1,.1))
         self.assertEqual(agent.state.completed_subgoals, ['first'])
 
+    def test_receipt_array_metadata_mutation_cannot_change_authoritative_feedback(self):
+        from test_predictive_skill_agent import PredictiveAgentTests
+        for name, change in (('error_bounds', 'dtype'), ('predicted_states', 'shape'),
+                             ('actions', 'dtype'), ('predicted_frames', 'shape')):
+            with self.subTest(name=name, change=change):
+                agent, candidate = PredictiveAgentTests().setup_components()
+                before = VisualObservation('episode',0,np.zeros((3,32,32)),np.array([0.]))
+                receipt = agent.plan(before,[candidate])
+                array = getattr(receipt,name)
+                if change=='dtype':
+                    array.dtype = np.uint64
+                else:
+                    array.shape = (array.size,)
+                # Must reject, not allow rewritten bounds to erase a real mismatch.
+                with self.assertRaises(ValueError):
+                    agent.record_feedback(receipt, VisualObservation('episode',receipt.prefix_length,
+                                          before.rgb,np.array([1.])))
+                self.assertEqual(agent.state.executed_cycles,0)
+
     @unittest.skipUnless(importlib.util.find_spec('torch'), 'Optional torch unavailable')
     def test_run_task_generates_actions_toward_active_waypoint(self):
         # Controlled environment below is a known real task-state transition,

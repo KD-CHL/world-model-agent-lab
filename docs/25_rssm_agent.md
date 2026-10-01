@@ -30,7 +30,8 @@ G1 两关节 `arm_delta`；waypoint 验证多步组织，不等于已实现抓�
 `belief`。belief 明确是**实测状态与预测证据账本**，不是长期隐变量记忆。
 无可信候选连续重观测三次后 `needs_review`，完整执行反馈清零连续计数；
 部分失败进入 `execution_failed`，不自动重发。任务总动作预算不因子目标切换重置。
-观测与决策数组不可写，回执绑定当前 pending 决策；回合、步号、模型版本仍校验。
+观测与决策数组数值不可写；Agent 另外保存私有权威回执，拒绝公开回执的
+dtype/shape/content 改写，反馈使用私有预测与界。回合、步号、模型版本仍校验。
 
 ## 2. 网络与梯度
 
@@ -65,6 +66,11 @@ unimix 避免类别分布退化到零概率。窗口完整且不跨 episode；�
 它**不是非线性 stochastic rollout 的精确期望**。集成成员保持自己的轨迹；
 entropy 只作为诊断，ensemble spread 只是离散程度，A3 使用的可信度仍来自
 独立 calibration 误差界。它们都不是碰撞/成功概率或真机安全证明。
+
+事件头按实际训练 mask 记录每个集成成员、每个通道的监督证据；只有所有成员
+均见过有效标签的通道才返回 `event_probabilities`，顺序由 `event_probability_names`
+明确给出。全无监督则返回 None；`event_weight=0` 不算新增监督，微调继承已记录
+的祖先监督。旧权重没有该记录时，不凭声明 event_dim 推断概率已受训练。
 
 本轮在线每次从当前真实观测初始化，候选段内 recurrent rollout。网络支持
 观测序列 API，但跨控制周期携带 latent memory 尚不启用；将来启用必须同时

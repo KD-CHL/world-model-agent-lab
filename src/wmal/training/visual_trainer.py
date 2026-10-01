@@ -118,6 +118,7 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     if pretrained is None:
         members=[make_member(network).to(config.device) for _ in range(config.members)]
         parent_version=None
+        parent_event_masks=[[False]*network.event_dim for _ in members]
     else:
         parent=VisualWorldModel.load(pretrained,device=config.device)
         if parent.config!=network or parent.semantics!=semantics or len(parent.members)!=config.members:
@@ -127,6 +128,8 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
         members=parent.members
         normalization=parent.normalization  # Freeze coordinates as well as learned backbone.
         parent_version=parent.version
+        parent_event_masks=parent.metadata.get('event_supervised_by_member',
+                                              [[False]*network.event_dim for _ in members])
     for kind,rows in (('train',train.rows),('selection',validation.rows)):
         for key in ('episode_ids','sha256'):
             field='episode_id' if key=='episode_ids' else 'sha256'
@@ -144,11 +147,18 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     by_episode={i:[j for j,(episode,_) in enumerate(train.index) if episode==i] for i in range(len(train.rows))}
     rng=np.random.default_rng(config.seed)
     loaders=[]
+    event_masks=[]
     for i in range(config.members):
         episode_indices=rng.integers(0,len(train.rows),len(train.rows))
         indices=[j for episode in episode_indices for j in by_episode[int(episode)]]
         if not indices:
             raise ValueError('Bootstrap contains no valid training windows')
+        event_supervised=np.asarray(parent_event_masks[i],dtype=bool).copy()
+        if config.event_weight>0 and network.event_dim:
+            for episode in set(map(int,episode_indices)):
+                if by_episode[episode]:
+                    event_supervised |= train._episode(episode)['event_mask'].astype(bool).any(0)
+        event_masks.append(event_supervised.tolist())
         loaders.append(DataLoader(Subset(train,indices),batch_size=config.batch_size,shuffle=True,
                                   generator=torch.Generator().manual_seed(config.seed+i),num_workers=0))
     val_loader=DataLoader(validation,batch_size=config.batch_size,shuffle=False,num_workers=0)
@@ -158,7 +168,10 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
               'training_episode_ids':[r['episode_id'] for r in train.rows],
               'selection_episode_ids':[r['episode_id'] for r in validation.rows],
               'parent_model_version':parent_version,'episode_lineage':lineage,'freeze_encoder':freeze_encoder,
-              'event_supervision':bool(network.event_dim),'config':asdict(config)}
+              'event_supervision':bool(np.asarray(event_masks,dtype=bool).all(0).any()),
+              'event_supervised_by_member':event_masks,
+              'event_supervised_channels':np.asarray(event_masks,dtype=bool).all(0).tolist(),
+              'config':asdict(config)}
     history,best,started=[],float('inf'),time.perf_counter()
     label='Fine-tune epochs' if pretrained is not None else 'Visual epochs'
     with progress_bar(config.epochs,label,enabled=show_progress,unit='epoch') as epochs:

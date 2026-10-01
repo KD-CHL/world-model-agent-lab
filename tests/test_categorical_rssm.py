@@ -9,6 +9,53 @@ import numpy as np
 
 @unittest.skipUnless(importlib.util.find_spec('torch'), 'Optional torch unavailable')
 class CategoricalRSSMTests(unittest.TestCase):
+    def test_missing_event_labels_are_not_inference_probabilities(self):
+        import json
+        from test_visual_world import make_dataset
+        from wmal.datasets.visual_sequences import write_manifest
+        from wmal.training.visual_trainer import VisualTrainingConfig, train_visual
+        from wmal.models.visual_latent import VisualWorldModel
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            manifest=make_dataset(root)
+            payload=json.loads(manifest.read_text())
+            rows=payload['episodes']
+            for row in rows:
+                with np.load(root/row['path']) as data:
+                    arrays={key:data[key] for key in data.files}
+                arrays['events']=np.zeros((8,2),dtype='float32')
+                arrays['event_mask']=np.zeros((8,2),dtype='float32')
+                # Only one event has actual train labels; validation labels aren't exposure.
+                if row['split']=='train':
+                    arrays['event_mask'][:,0]=1
+                np.savez(root/row['path'],**arrays)
+            semantics=dict(payload['semantics'])
+            semantics.pop('event_names')
+            write_manifest(manifest,rows,**semantics,source=payload['source'],event_names=['contact','success'])
+            cfg=VisualTrainingConfig(epochs=1,members=2,batch_size=16,horizon=2,
+                                      latent_dim=16,hidden_dim=24,architecture='categorical_rssm',stoch=4,classes=4)
+            train_visual(manifest,root/'first',cfg)
+            model=VisualWorldModel.load(root/'first/best.pt')
+            result=model.predict(np.zeros((3,32,32)),np.zeros(2),np.zeros((2,2)))
+            self.assertEqual(result['event_probability_names'],['contact'])
+            self.assertEqual(result['event_probabilities'].shape,(2,2,1))
+            self.assertEqual(model.metadata['event_supervised_channels'],[True,False])
+            # New data without labels must not erase already-trained parent channel.
+            for row in rows:
+                with np.load(root/row['path']) as data:
+                    arrays={key:data[key] for key in data.files}
+                arrays['event_mask'][:]=0
+                np.savez(root/row['path'],**arrays)
+            write_manifest(manifest,rows,**semantics,source=payload['source'],event_names=['contact','success'])
+            train_visual(manifest,root/'fine',cfg,pretrained=root/'first/best.pt')
+            tuned=VisualWorldModel.load(root/'fine/best.pt')
+            self.assertEqual(tuned.metadata['event_supervised_channels'],[True,False])
+            train_visual(manifest,root/'none',cfg)
+            missing=VisualWorldModel.load(root/'none/best.pt')
+            result=missing.predict(np.zeros((3,32,32)),np.zeros(2),np.zeros((2,2)))
+            self.assertIsNone(result['event_probabilities'])
+            self.assertEqual(result['event_probability_names'],[])
+
     def test_training_finetune_calibration_and_test_isolation(self):
         import torch
         from test_visual_world import make_dataset
