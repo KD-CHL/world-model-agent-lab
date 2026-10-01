@@ -56,6 +56,33 @@ class RunCatalogTests(unittest.TestCase):
         self.assertEqual(info['available_images'], ['predicted_rgb'])
         self.assertEqual(info['actions'], [[0.0], [0.0]])
 
+    def test_training_history_list_is_a_supported_json_artifact(self):
+        (self.run / 'history.json').write_text('[{"epoch":1,"validation_loss":0.2}]')
+        run_id = self.catalog.list_runs()[0]['run_id']
+        self.assertEqual(self.catalog.read_json_artifact(run_id, 'history.json'),
+                         [{'epoch': 1, 'validation_loss': .2}])
+
+    def test_named_benchmark_logs_are_independent_event_sources(self):
+        suite = self.root / 'g1_suite'
+        suite.mkdir()
+        (suite / 'results.json').write_text('{}')
+        (suite / 'obstacle-seed0.jsonl').write_text('{"event":"goal_result"}\n')
+        (suite / 'obstacle-seed1.jsonl').write_text('{"event":"plan"}\n')
+        runs = self.catalog.list_runs()
+        sources = [row for row in runs if row.get('events_file', '').startswith('obstacle')]
+        self.assertEqual(len(sources), 2)
+        self.assertEqual(len({row['run_id'] for row in sources}), 2)
+        for row in sources:
+            self.assertEqual(self.catalog.event_log_path(row['run_id']).name, row['events_file'])
+            self.assertEqual(self.catalog.resolve_run(row['run_id']), suite)
+
+    def test_dark_uint8_prediction_pixels_are_not_rescaled(self):
+        from wmal.monitor.catalog import _encode_png
+        rgb = np.ones((4, 5, 3), dtype=np.uint8)
+        np.savez(self.run / 'prediction_dark.npz', predicted_rgb=rgb)
+        run_id = self.catalog.list_runs()[0]['run_id']
+        self.assertEqual(self.catalog.read_prediction_frame(run_id, 'prediction_dark.npz'), _encode_png(rgb))
+
     def test_rejects_path_traversal_symlink_escape_and_unknown_run(self):
         run_id = self.catalog.list_runs()[0]['run_id']
         outside = Path(self.temp.name) / 'outside.json'

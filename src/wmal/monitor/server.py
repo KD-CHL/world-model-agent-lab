@@ -22,7 +22,7 @@ class EventStore:
         self.lock = Lock()
 
     def snapshot(self, run_id, after=0, limit=500):
-        path = self.catalog.resolve_run(run_id) / 'events.jsonl'
+        path = self.catalog.event_log_path(run_id)
         if path.is_symlink():
             raise ValueError('Symbolic-link logs are not served')
         with self.lock:
@@ -231,7 +231,8 @@ class MonitorServer:
                 if frame is None:
                     raise FileNotFoundError('No live frame')
                 return self._send(handler, _encode_png(frame.rgb), 'image/png',
-                                  {'X-Episode-ID': frame.episode_id, 'X-Step-ID': frame.step_id})
+                                  {'X-Episode-ID': frame.episode_id, 'X-Step-ID': frame.step_id,
+                                   'X-Sim-Time-S': frame.sim_time_s, 'X-Captured-At-UTC': frame.captured_at_utc})
         raise KeyError(path)
 
     def _stream(self, handler, run_id, after):

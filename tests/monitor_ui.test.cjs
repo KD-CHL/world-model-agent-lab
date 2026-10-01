@@ -1,0 +1,16 @@
+const assert = require('node:assert/strict');
+const ui = require('../src/wmal/monitor/static/monitor.js');
+assert.equal(ui.format(null), '未记录');
+assert.equal(ui.format(NaN), '未记录');
+assert.equal(ui.format(.25), '0.250');
+assert.equal(ui.alignment({episode_id:'e1', step_id:4}, {episode_id:'e1', step_id:4}), 'same_step');
+assert.equal(ui.alignment({episode_id:'e1', step_id:4,sim_time_s:1.2}, {episode_id:'e1', step_id:4,sim_time_s:1.2}), 'exact');
+assert.equal(ui.alignment({episode_id:'e1', step_id:4,sim_time_s:1.4}, {episode_id:'e1', step_id:4,sim_time_s:1.2}), 'different_time');
+assert.equal(ui.alignment({episode_id:'e2', step_id:4}, {episode_id:'e1', step_id:4}), 'different_episode');
+assert.equal(ui.alignment({step_id:4}, {episode_id:'e1', step_id:4}), 'unknown');
+assert.deepEqual(ui.mergeEvents([{cursor:1,event:'plan'}], [{cursor:1,event:'plan'}, {cursor:2,event:'feedback'}]).map(r=>r.cursor), [1,2]);
+assert.deepEqual(ui.mergeEvents([{cursor:1}], [{cursor:3}], true), [{cursor:3}]);
+const element = {textContent: ''};
+ui.setText(element, '<img src=x onerror=alert(1)>');
+assert.equal(element.textContent, '<img src=x onerror=alert(1)>');
+console.log('UI behavior: missing values, alignment, reconnect de-duplication, source reset and text-only rendering passed');

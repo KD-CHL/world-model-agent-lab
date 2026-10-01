@@ -3,6 +3,11 @@ from wmal.monitor.state import summarize, sanitize
 
 
 class MonitorStateTests(unittest.TestCase):
+    def test_session_telemetry_does_not_invent_a_new_task(self):
+        rows = [{'event': 'task_result', 'payload': {'status': 'succeeded'}},
+                {'event': 'session_exit', 'payload': {}}]
+        self.assertEqual(len(summarize(rows)['tasks']), 1)
+
     def test_missing_final_event_remains_incomplete_and_preserves_units(self):
         rows = [
             {'event': 'plan', 'payload': {'task_id': 'one', 'planning_latency_s': .025}},

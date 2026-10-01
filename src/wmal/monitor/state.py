@@ -32,6 +32,8 @@ def summarize(events):
         kind, payload = row['event'], row['payload']
         counts[kind] += 1
         latest[kind] = payload
+        if kind in ('session_exit', 'session_reset', 'run_started', 'monitor_status'):
+            continue
         task_id = payload.get('task_id') or 'legacy-' + str(legacy_index)
         task = tasks.setdefault(task_id, {'task_id': task_id, 'status': 'incomplete', 'cycles': None})
         if kind == 'task_started':

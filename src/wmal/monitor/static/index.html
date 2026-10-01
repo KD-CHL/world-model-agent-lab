@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WMAL · Agent 实验观测台</title>
+  <link rel="stylesheet" href="/static/monitor.css">
+  <script defer src="/static/monitor.js"></script>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand"><span class="mark">W</span><div>WORLD MODEL LAB<small>机器人智能体 · 实验观测台</small></div></div>
+  <div class="sidebar-heading">实验目录 <button id="refreshRuns" class="icon-button" title="刷新实验目录" aria-label="刷新实验目录">↻</button></div>
+  <input id="runSearch" type="search" placeholder="搜索实验名称…" aria-label="搜索实验名称">
+  <div id="runList" class="run-list"><p class="muted">正在读取实验目录…</p></div>
+  <div class="sidebar-foot"><span class="badge">只读观测</span><p>连接状态仅表示监控服务可用。实验执行状态由记录与仿真源提供。</p></div>
+</aside>
+<main>
+  <header><div><div class="eyebrow">AGENT / WORLD MODEL / ROBOT</div><h1 id="runTitle">实验观测台</h1><p id="runSubtitle" class="muted">选择实验，查看决策、预测与执行证据</p></div>
+    <div class="header-actions"><span id="connection" class="badge">等待连接</span><label><input id="follow" type="checkbox" checked> 跟随最新记录</label></div>
+  </header>
+  <nav class="tabs" aria-label="监控视图">
+    <button class="active" data-page="workspace">实时工作台</button><button data-page="evidence">预测与反馈</button>
+    <button data-page="history">事件与工件</button><button data-page="compare">实验对比</button>
+  </nav>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <section class="metrics">
+    <div class="metric"><span>任务结果 · 成功 / 已结束</span><strong id="taskMetric">—</strong><small id="taskHint">仅按实际终态记录计数</small></div>
+    <div class="metric"><span>规划时延 p50 / p95</span><strong id="latencyMetric">—</strong><small id="latencyHint">未记录</small></div>
+    <div class="metric"><span>计划循环 / 显式重规划请求</span><strong id="replanMetric">—</strong><small>两者分别计数</small></div>
+    <div class="metric"><span id="errorTitle">预测误差</span><strong id="errorMetric">—</strong><small id="errorHint">按指标单位分别统计</small></div>
+  </section>
+  <section data-view="workspace">
+    <div class="flow" id="flow"><span>观测</span><i>→</i><span>候选计划</span><i>→</i><span>世界模型评估</span><i>→</i><span>动作执行</span><i>→</i><span>真实反馈</span></div>
+    <div class="workspace-grid">
+      <article class="panel camera-panel"><div class="panel-head"><h2>MuJoCo 仿真画面</h2><span id="frameStatus" class="badge">未接入实时帧</span></div>
+        <div class="camera-stage"><img id="liveFrame" alt="MuJoCo 实时观测" hidden><div id="framePlaceholder" class="empty"><span class="empty-symbol">◎</span><strong>实时画面尚未接入</strong><p>历史实验仍可查看事件和预测工件</p></div></div>
+        <dl id="frameMeta" class="frame-meta"></dl><p id="frameAlignment" class="muted small">等待帧与事件的对齐信息</p>
+      </article>
+      <article class="panel"><div class="panel-head"><h2>Agent 任务状态</h2><span id="taskStatus" class="badge">未记录</span></div>
+        <dl id="agentState" class="kv"></dl><div class="divider"></div><h3>预测与执行接口</h3><dl id="modelState" class="kv"></dl>
+        <details><summary>最近反馈与失败原因</summary><pre id="recentFeedback">未记录</pre></details>
+      </article>
+    </div>
+    <article class="panel"><div class="panel-head"><h2>候选计划评估</h2><span id="candidateHint" class="muted small">等待候选记录</span></div>
+      <div class="table-wrap"><table><thead><tr><th>候选</th><th>技能</th><th>评估分数</th><th>可信 / 可执行前缀</th><th>选择结果</th></tr></thead><tbody id="candidateRows"></tbody></table></div>
+      <details><summary>原始规划证据与动作</summary><pre id="planDetails">未记录</pre></details>
+    </article>
+  </section>
+  <section data-view="evidence" hidden>
+    <article class="panel"><div class="panel-head"><h2>预测与真实观测</h2><select id="predictionSelect" aria-label="选择预测工件"><option value="">无预测工件</option></select></div>
+      <p id="predictionAlignment" class="muted small">选择工件查看图像证据</p>
+      <div class="image-grid"><figure><div><img id="beforeImage" alt="初始真实观测" hidden></div><figcaption>初始真实观测</figcaption></figure><figure><div><img id="predictedImage" alt="模型预测观测" hidden></div><figcaption id="predictionCaption">模型预测</figcaption></figure><figure><div><img id="observedImage" alt="执行后真实终端观测" hidden></div><figcaption>实际终端观测（仅终端帧）</figcaption></figure></div>
+      <div class="slider-row"><label for="predictionStep">预测步</label><input id="predictionStep" type="range" min="0" max="0" value="0"><span id="predictionStepLabel">未记录</span></div>
+      <div class="table-wrap"><table><thead><tr><th>状态维度</th><th>预测值</th><th>实测值</th><th>绝对误差</th><th>校准误差界</th></tr></thead><tbody id="stateRows"></tbody></table></div>
+      <p id="uncertaintyNote" class="muted small">误差界与成员分歧依记录语义呈现，不转换为失败概率。</p>
+    </article>
+    <div class="two-columns"><article class="panel"><h2 id="errorChartTitle">预测残差趋势</h2><div id="errorChart" class="chart"></div></article><article class="panel"><h2>执行前缀长度</h2><div id="prefixChart" class="chart"></div></article></div>
+  </section>
+  <section data-view="history" hidden>
+    <article class="panel"><div class="panel-head"><h2>事件时间线</h2><span id="eventCount" class="muted small">0 条</span></div>
+      <div class="filters"><select id="eventFilter" aria-label="事件类型"><option value="">全部事件</option></select><input id="episodeFilter" placeholder="回合 ID" aria-label="回合过滤"><input id="stepFilter" type="number" min="0" placeholder="步号" aria-label="步号过滤"><input id="eventSearch" type="search" placeholder="搜索技能、失败原因…" aria-label="事件内容搜索"></div>
+      <div class="event-grid"><div class="timeline-scroll"><table><thead><tr><th>序号</th><th>事件</th><th>步号</th><th>时间</th><th>任务 / 回合</th></tr></thead><tbody id="eventRows"></tbody></table></div><div class="event-detail"><h3 id="eventDetailTitle">选择事件查看完整证据</h3><pre id="eventDetail">未选择事件</pre><button id="showEventEvidence" hidden>查看该决策的预测工件</button></div></div>
+      <p id="sourceStatus" class="muted small"></p>
+    </article>
+    <div class="two-columns"><article class="panel"><h2>实验工件</h2><div id="artifactList" class="artifact-list"></div></article><article class="panel"><h2 id="artifactTitle">配置、来源与结果</h2><div id="trainingChart" class="chart" hidden></div><pre id="artifactDetail">选择工件查看内容</pre></article></div>
+  </section>
+  <section data-view="compare" hidden>
+    <article class="panel"><div class="panel-head"><h2>实验描述性对比</h2><button id="compareRefresh">更新对比</button></div><p class="muted">按已记录数据对比；不同任务、控制器或数据来源需要分别解释。</p>
+      <div class="compare-selects"><select id="compareA" aria-label="对比实验 A"></select><select id="compareB" aria-label="对比实验 B"></select></div>
+      <div class="table-wrap"><table><thead><tr><th>指标 / 来源</th><th id="compareNameA">实验 A</th><th id="compareNameB">实验 B</th></tr></thead><tbody id="compareRows"></tbody></table></div>
+    </article>
+  </section>
+  <footer><span>本地只读 · 原始记录为实验依据</span><span id="updatedAt">等待数据</span></footer>
+</main>
+</body>
+</html>

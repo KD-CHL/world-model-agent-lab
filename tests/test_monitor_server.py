@@ -60,6 +60,8 @@ class MonitorServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers['Content-Type'], 'image/png')
         self.assertEqual(headers['X-Episode-ID'], 'episode1')
+        self.assertEqual(float(headers.get('X-Sim-Time-S', -1)), 1.4)
+        self.assertIn('X-Captured-At-UTC', headers)
         self.assertTrue(data.startswith(b'\x89PNG'))
         live = json.loads(self.request('/api/live/' + self.run_id + '/status')[2])
         self.assertEqual(live['step_id'], 7)

@@ -21,6 +21,7 @@ _ROOT_MARKERS = {'events.jsonl', 'run_manifest.json', 'manifest.json',
 
 def _is_artifact_name(name):
     return (name in _ROOT_MARKERS or
+            (name.endswith('.jsonl') and not name.startswith('.')) or
             (name.startswith('task_') and name.endswith('.json')) or
             (name.startswith('prediction_') and name.endswith('.npz')) or
             (name.lower().endswith(('.png', '.jpg', '.jpeg')) and not name.startswith('.')))
@@ -63,7 +64,7 @@ class RunCatalog:
                           if not (base / name).is_symlink() and not name.startswith('.')]
             names = {name for name in files if not (base / name).is_symlink()}
             if not (names & _ROOT_MARKERS or
-                    any(name.startswith(('task_', 'prediction_')) for name in names)):
+                    any(name.startswith(('task_', 'prediction_')) or name.endswith('.jsonl') for name in names)):
                 continue
             relative = self._relative(base)
             run_id = self._run_id(relative)
@@ -78,11 +79,18 @@ class RunCatalog:
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                     pass
             found[run_id] = {'run_id': run_id, 'run_path': relative,
+                             'directory': relative, 'events_file': 'events.jsonl',
                              'run_kind': manifest.get('run_kind', manifest.get('kind')),
                              'started_at_utc': manifest.get('created_at_utc'),
                              'git_commit': manifest.get('git_commit'),
                              'git_dirty': manifest.get('git_dirty'),
                              'seed': manifest.get('seed'), 'manifest': manifest}
+            for name in sorted(names):
+                if name == 'events.jsonl' or name.startswith('.') or not name.endswith('.jsonl'):
+                    continue
+                source_id = self._run_id(relative + '::' + name)
+                found[source_id] = {**found[run_id], 'run_id': source_id,
+                                    'run_path': relative + '/' + name, 'events_file': name}
         self._runs = found
         return sorted(found.values(), key=lambda row: (row.get('started_at_utc') or '', row['run_path']))
 
@@ -91,9 +99,17 @@ class RunCatalog:
             self.list_runs()
         if run_id not in self._runs:
             raise KeyError('Unknown run id')
-        path = (self.root / self._runs[run_id]['run_path']).resolve()
+        row = self._runs[run_id]
+        path = (self.root / row.get('directory', row['run_path'])).resolve()
         if not path.is_relative_to(self.root) or not path.is_dir():
             raise ValueError('Run path escaped the configured root')
+        return path
+
+    def event_log_path(self, run_id):
+        run = self.resolve_run(run_id)
+        path = run / self._runs[run_id]['events_file']
+        if path.is_symlink():
+            raise ValueError('Symbolic-link logs are not served')
         return path
 
     def _safe_file(self, run_id, relative_path):
@@ -122,7 +138,7 @@ class RunCatalog:
             if path.is_symlink() or not path.is_file() or not _is_artifact_name(path.name):
                 continue
             suffix = path.suffix.lower()
-            kind = ('events' if path.name == 'events.jsonl' else
+            kind = ('events' if suffix == '.jsonl' else
                     'manifest' if path.name in ('run_manifest.json', 'manifest.json') else
                     'prediction' if suffix == '.npz' else
                     'image' if suffix in ('.png', '.jpg', '.jpeg') else 'json')
@@ -139,8 +155,8 @@ class RunCatalog:
             value = json.loads(target.read_text(encoding='utf-8'))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError('Artifact contains invalid JSON') from exc
-        if not isinstance(value, dict):
-            raise ValueError('JSON artifact must contain an object')
+        if not isinstance(value, (dict, list)):
+            raise ValueError('JSON artifact must contain an object or array')
         return value
 
     def read_prediction_frame(self, run_id, relative_path, index=0, key='predicted_rgb'):
@@ -176,10 +192,11 @@ class RunCatalog:
         if (selected.ndim != 3 or selected.shape[2] != 3
                 or selected.shape[0] * selected.shape[1] > _MAX_FRAME_PIXELS):
             raise ValueError('Prediction frame has unsupported image dimensions')
+        normalized = selected.dtype.kind == 'f'
         selected = selected.astype(np.float32, copy=False)
         if not np.isfinite(selected).all() or selected.min() < 0 or selected.max() > 255:
             raise ValueError('Prediction frame contains invalid pixel values')
-        if selected.max(initial=0) <= 1:
+        if normalized and selected.max(initial=0) <= 1:
             selected = selected * 255
         return _encode_png(np.rint(selected).astype(np.uint8))
 
