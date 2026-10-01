@@ -16,8 +16,9 @@ from wmal.monitor.state import sanitize, summarize
 
 
 class EventStore:
-    def __init__(self, catalog):
+    def __init__(self, catalog, source_stopped=lambda _: False):
         self.catalog = catalog
+        self.source_stopped = source_stopped
         self.sessions = OrderedDict()
         self.lock = Lock()
 
@@ -29,23 +30,28 @@ class EventStore:
             if run_id not in self.sessions:
                 if len(self.sessions) >= 32:
                     self.sessions.popitem(last=False)
-                self.sessions[run_id] = (JsonlEventTail(path), deque(maxlen=5000))
+                self.sessions[run_id] = (JsonlEventTail(path), deque(maxlen=5000), None)
             self.sessions.move_to_end(run_id)
-            tail, history = self.sessions[run_id]
+            tail, history, reset_through = self.sessions[run_id]
             previous_generation = tail.status['source_generation']
+            previous_cursor = tail.status['cursor']
             added = tail.read_new()
             source_changed = tail.status['source_generation'] != previous_generation
             if source_changed:
                 history.clear()
+                reset_through = previous_cursor
+                self.sessions[run_id] = (tail, history, reset_through)
             history.extend(added)
             retained = list(history)
-            reset = bool(source_changed or after > tail.status['cursor'] or
+            reset = bool(source_changed or (reset_through is not None and after <= reset_through)
+                         or after > tail.status['cursor'] or
                          (retained and after and after < retained[0]['cursor'] - 1))
             effective = 0 if reset else after
             selected = [row for row in retained if row['cursor'] > effective][:limit]
             cursor = selected[-1]['cursor'] if selected else tail.status['cursor']
             return sanitize({'events': selected, 'cursor': cursor, 'reset': reset,
-                             'source': tail.status, 'summary': summarize(retained)})
+                             'source': tail.status,
+                             'summary': summarize(retained, self.source_stopped(run_id))})
 
 
 class MonitorServer:
@@ -58,8 +64,9 @@ class MonitorServer:
             raise ValueError('Invalid monitor polling interval')
         self.catalog = catalog
         self.frames = frame_buffer if frame_buffer is not None else LatestFrameBuffer()
-        self.events = EventStore(catalog)
         self.sources = {}
+        self.events = EventStore(catalog, lambda run_id: bool(
+            self.sources.get(run_id) and self.sources[run_id].status().get('closed')))
         self.poll_interval_s = poll_interval_s
         self.stopping = Event()
         self._streams = BoundedSemaphore(16)

@@ -13,4 +13,29 @@ assert.deepEqual(ui.mergeEvents([{cursor:1}], [{cursor:3}], true), [{cursor:3}])
 const element = {textContent: ''};
 ui.setText(element, '<img src=x onerror=alert(1)>');
 assert.equal(element.textContent, '<img src=x onerror=alert(1)>');
+assert.equal(typeof ui.RequestSequence, 'function');
+const requests = new ui.RequestSequence();
+const slow=requests.next(), fast=requests.next();
+assert.equal(requests.isCurrent(slow), false);
+assert.equal(requests.isCurrent(fast), true);
+assert.equal(typeof ui.currentTaskState, 'function');
+assert.deepEqual(ui.currentTaskState({task_result:{state:{status:'succeeded',task_goal:[1]}}},
+                                    {task_id:'legacy-1',status:'incomplete'}), {});
+assert.equal(typeof ui.candidateViews, 'function', 'Both visual and floating-G1 evidence must be projected');
+assert.deepEqual(ui.candidateViews({planning_evidence:{selected_candidate:2,candidates:[
+  {candidate_id:2,cost:.3,rejection:null},{candidate_id:3,cost:null,rejection:'predicted_constraint'}]}}), [
+    {id:2,skill:null,score:.3,prefix:null,chosen:true,rejection:null},
+    {id:3,skill:null,score:null,prefix:null,chosen:false,rejection:'predicted_constraint'}]);
+assert.deepEqual(ui.candidateViews({evidence:{selected_candidate:0,candidates:[
+  {candidate:0,skill:'arm_delta',score:.2,trusted_prefix:2}]}}), [
+    {id:0,skill:'arm_delta',score:.2,prefix:2,chosen:true,rejection:null}]);
+assert.equal(typeof ui.clearEvidenceViews, 'function', 'Run switches must clear previously displayed evidence');
+const retained = new Map();
+for (const id of ['eventDetail','eventDetailTitle','predictionAlignment','predictionStepLabel',
+                 'artifactDetail','artifactTitle','frameAlignment','frameMeta','stateRows']) {
+  retained.set(id, {textContent:'previous run evidence', hidden:false});
+}
+const getElement = id => retained.get(id);
+ui.clearEvidenceViews(getElement);
+for (const el of retained.values()) assert.notEqual(el.textContent, 'previous run evidence');
 console.log('UI behavior: missing values, alignment, reconnect de-duplication, source reset and text-only rendering passed');

@@ -3,6 +3,20 @@ from wmal.monitor.state import summarize, sanitize
 
 
 class MonitorStateTests(unittest.TestCase):
+    def test_bad_field_types_do_not_poison_later_valid_events(self):
+        rows = [{'event':'task_result','payload':{'task_id':['bad'],'status':[]}},
+                {'event':'plan','payload':{'evidence':{'planning_ms':10**400}}},
+                {'event':'task_result','payload':{'task_id':'good','status':'succeeded'}}]
+        result = summarize(rows)
+        self.assertEqual(result['tasks'][-1]['status'], 'succeeded')
+        self.assertEqual(result['tasks'][0]['status'], 'incomplete')
+        self.assertEqual(result['planning_latency_ms']['n'], 0)
+
+    def test_explicit_session_stop_marks_unfinished_task_incomplete(self):
+        result = summarize([{'event':'task_started','payload':{'task_id':'t1'}},
+                            {'event':'session_exit','payload':{}}])
+        self.assertEqual(result['tasks'][0]['status'], 'incomplete')
+
     def test_session_telemetry_does_not_invent_a_new_task(self):
         rows = [{'event': 'task_result', 'payload': {'status': 'succeeded'}},
                 {'event': 'session_exit', 'payload': {}}]

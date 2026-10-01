@@ -40,6 +40,12 @@ class FramePublisherTests(unittest.TestCase):
             self.assertEqual(frame.episode_id, result.episode_id)
             self.assertEqual(frame.step_id, result.step_id)
             self.assertEqual(frame.sim_time_s, result.sim_time_s)
+            monitored = (session.data.qpos.copy(), session.data.qvel.copy(), session.data.time)
+        with G1MuJoCoSession(viewer=False, realtime=False) as plain:
+            plain.step(G1VelocityAction(.1, 0., 0., .2))
+            np.testing.assert_array_equal(plain.data.qpos, monitored[0])
+            np.testing.assert_array_equal(plain.data.qvel, monitored[1])
+            self.assertEqual(plain.data.time, monitored[2])
 
     def test_mujoco_monitor_does_not_change_physics_results(self):
         from wmal.envs.visual_workcell import VisualWorkcellSession

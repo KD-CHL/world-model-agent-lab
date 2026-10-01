@@ -231,7 +231,15 @@ class RunCatalog:
         self._validate_prediction_archive(target)
         with np.load(target, allow_pickle=False) as archive:
             available = [key for key in ('before_rgb', 'predicted_rgb', 'observed_rgb') if key in archive.files]
-            count = int(archive['predicted_rgb'].shape[0]) if 'predicted_rgb' in available else 0
+            count = 0
+            if 'predicted_rgb' in available:
+                shape = archive['predicted_rgb'].shape
+                if len(shape) not in (3, 4):
+                    raise ValueError('Prediction image must be CHW/HWC or TCHW/THWC')
+                count = int(shape[0]) if len(shape) == 4 else 1
+                image_shape = shape[-3:]
+                if 3 not in (image_shape[0], image_shape[-1]) or not 1 <= count <= 256:
+                    raise ValueError('Invalid prediction frame dimensions or count')
             result = {'available_images': available, 'frame_count': count, 'artifact': relative_path}
             for key in ('predicted_state', 'observed_state', 'actions', 'error_bounds',
                         'episode_id', 'before_step', 'after_step', 'decision_id'):
@@ -240,5 +248,8 @@ class RunCatalog:
                     if array.size > 16384:
                         raise ValueError('Prediction metadata is too large')
                     result[key] = array.tolist()
-        result['aligned'] = all(key in result for key in ('episode_id', 'before_step', 'after_step', 'decision_id'))
+        before, after = result.get('before_step'), result.get('after_step')
+        result['aligned'] = (isinstance(result.get('episode_id'), str) and bool(result['episode_id'])
+            and isinstance(result.get('decision_id'), str) and bool(result['decision_id'])
+            and type(before) is int and type(after) is int and 0 <= before <= after)
         return result

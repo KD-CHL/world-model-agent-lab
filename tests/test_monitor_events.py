@@ -7,6 +7,30 @@ from wmal.monitor.events import JsonlEventTail
 
 
 class JsonlEventTailTests(unittest.TestCase):
+    def test_same_inode_same_length_rewrite_preserving_first_row_resets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'events.jsonl'
+            path.write_text('{"event":"head"}\n{"event":"old"}\n')
+            tail = JsonlEventTail(path)
+            self.assertEqual(len(tail.read_new()), 2)
+            path.write_text('{"event":"head"}\n{"event":"new"}\n')
+            rows = tail.read_new()
+            self.assertEqual([row['event'] for row in rows], ['head','new'])
+            self.assertEqual(tail.status['source_generation'], 1)
+
+    def test_excessively_nested_json_is_reported_and_next_event_is_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'events.jsonl'
+            path.write_text('{"event":"plan","payload":{"nested":' + '[' * 1200 + '0'
+                            + ']' * 1200 + '}}\n{"event":"ok"}\n')
+            tail = JsonlEventTail(path)
+            try:
+                rows = tail.read_new()
+            except RecursionError:
+                self.fail('A malformed deeply nested row escaped the read-only event reader')
+            self.assertEqual([r['event'] for r in rows], ['ok'])
+            self.assertEqual(tail.status['error_count'], 1)
+
     def test_discarding_incomplete_oversize_line_keeps_memory_bounded(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'events.jsonl'

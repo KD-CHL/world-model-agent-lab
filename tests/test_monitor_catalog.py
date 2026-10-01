@@ -9,6 +9,14 @@ from wmal.monitor.catalog import RunCatalog
 
 
 class RunCatalogTests(unittest.TestCase):
+    def test_single_frame_archive_reports_one_frame_and_validates_alignment(self):
+        np.savez(self.run / 'prediction_single.npz', predicted_rgb=np.zeros((3,8,8), dtype=np.float32),
+                 episode_id=np.array(['not-a-scalar']),before_step=-1,after_step=0,decision_id='d')
+        run_id = self.catalog.list_runs()[0]['run_id']
+        info = self.catalog.read_prediction_info(run_id, 'prediction_single.npz')
+        self.assertEqual(info['frame_count'], 1)
+        self.assertFalse(info['aligned'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name) / 'runs'

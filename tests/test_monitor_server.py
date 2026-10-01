@@ -14,6 +14,25 @@ from wmal.monitor.server import MonitorServer
 
 
 class MonitorServerTests(unittest.TestCase):
+    def test_stopped_source_does_not_leave_an_unfinished_task_running(self):
+        from wmal.monitor.publisher import FramePublisher
+        publisher = FramePublisher(self.buffer, self.run_id, 'overview')
+        self.server.register_source(self.run_id, publisher)
+        publisher.close()
+        data = json.loads(self.request('/api/runs/' + self.run_id + '/events')[2])
+        self.assertEqual(data['summary']['tasks'][0]['status'], 'incomplete')
+
+    def test_each_reader_receives_rotation_reset(self):
+        base = '/api/runs/' + self.run_id + '/events?after=1'
+        self.request('/api/runs/' + self.run_id + '/events')
+        replacement = self.run / 'replacement.jsonl'
+        replacement.write_text('{"event":"new_source"}\n')
+        replacement.replace(self.log)
+        first, second = [json.loads(self.request(base)[2]) for _ in range(2)]
+        self.assertTrue(first['reset'])
+        self.assertTrue(second['reset'])
+        self.assertEqual(second['events'][0]['event'], 'new_source')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import os
+from hashlib import sha256
 from threading import Lock
 
 
@@ -27,6 +28,8 @@ class JsonlEventTail:
         self._error_count = 0
         self._last_error = None
         self._exists = False
+        self._prefix_hash = sha256()
+        self._mtime_ns = None
 
     @property
     def status(self):
@@ -46,6 +49,8 @@ class JsonlEventTail:
             self._line = 0
             self._head_line = None
             self._exists = False
+            self._prefix_hash = sha256()
+            self._mtime_ns = None
 
     def read_new(self):
         with self._lock:
@@ -61,6 +66,15 @@ class JsonlEventTail:
                     self._restart_source()
                 elif self._identity is not None and info.st_size < self._offset:
                     self._restart_source()
+                elif (self._identity is not None and self._offset and info.st_size == self._offset
+                      and self._mtime_ns != info.st_mtime_ns):
+                    # Appends remain incremental; rare same-length rewrites require a content check.
+                    stream.seek(0)
+                    digest = sha256()
+                    for block in iter(lambda: stream.read(65_536), b''):
+                        digest.update(block)
+                    if digest.digest() != self._prefix_hash.digest():
+                        self._restart_source()
                 stream.seek(0)
                 first_line = stream.readline(self.max_line_bytes + 1)
                 if (self._identity is not None and self._head_line is not None
@@ -79,7 +93,9 @@ class JsonlEventTail:
                     if not chunk:
                         break
                     self._offset = stream.tell()
+                    self._prefix_hash.update(chunk)
                     events.extend(self._consume(chunk, remaining=1000 - len(events)))
+                self._mtime_ns = info.st_mtime_ns
                 return events
 
     def _restart_source(self):
@@ -90,6 +106,8 @@ class JsonlEventTail:
         self._discarding = False
         self._line = 0
         self._head_line = None
+        self._prefix_hash = sha256()
+        self._mtime_ns = None
 
     def _record_error(self, kind, message, line=None):
         self._error_count += 1
