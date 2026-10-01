@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Subset
 
 from wmal.datasets.visual_sequences import VisualDataset, read_episode_lineage, assert_unexposed_episodes
 from wmal.logging.manifest import atomic_json, sha256_file
-from wmal.models.visual_latent import NetworkConfig, VisualLatentMember, VisualWorldModel
+from wmal.models.visual_latent import NetworkConfig, make_member, VisualWorldModel
 from wmal.training.progress import progress_bar, training_status, epoch_status
 
 
@@ -34,6 +34,14 @@ class VisualTrainingConfig:
     seed: int = 0
     device: str = 'cpu'
     threads: int = 1
+    architecture: str = 'deterministic'
+    stoch: int = 8
+    classes: int = 8
+    unimix: float = .01
+    dyn_weight: float = 1.
+    rep_weight: float = .1
+    free_nats: float = 1.
+    reconstruction_weight: float = 1.
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in (self.epochs,self.members,self.batch_size,
@@ -44,6 +52,11 @@ class VisualTrainingConfig:
                 or self.learning_rate<=0 or not math.isfinite(self.gradient_clip) or self.gradient_clip<=0
                 or self.frame_weight<=0 or self.state_weight<=0):
             raise ValueError('Invalid visual training configuration')
+        NetworkConfig(1,1,architecture=self.architecture,stoch=self.stoch,
+                      classes=self.classes,unimix=self.unimix)
+        if any(not math.isfinite(v) or v<0 for v in
+               (self.dyn_weight,self.rep_weight,self.free_nats,self.reconstruction_weight)):
+            raise ValueError('Invalid RSSM loss configuration')
 
 
 def batch_loss(member, batch, normalization, config):
@@ -52,6 +65,9 @@ def batch_loss(member, batch, normalization, config):
     norm={key:torch.as_tensor(value,dtype=torch.float32,device=device) for key,value in normalization.items()}
     state=(state-norm['state_mean'])/norm['state_scale']
     action=(action-norm['action_mean'])/norm['action_scale']
+    if member.config.architecture=='categorical_rssm':
+        from wmal.training.rssm_loss import rssm_loss
+        return rssm_loss(member,rgb,state,action,batch,config)
     prediction=member.imagine(rgb[:,0],state[:,0],action)
     # Dynamic pixels are upweighted, but are targets only (not rollout inputs).
     weights=1.+config.change_weight*(rgb[:,1:]-rgb[:,:1]).abs().mean(2,keepdim=True)
@@ -93,12 +109,14 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     semantics=train.semantics
     network=NetworkConfig(len(semantics['state_order']),len(semantics['action_order']),
                           image_size=semantics['image_size'],latent_dim=config.latent_dim,
-                          hidden_dim=config.hidden_dim,event_dim=len(semantics.get('event_names',[])))
+                          hidden_dim=config.hidden_dim,event_dim=len(semantics.get('event_names',[])),
+                          architecture=config.architecture,stoch=config.stoch,
+                          classes=config.classes,unimix=config.unimix)
     normalization=train.normalization()
     lineage={'schema':'wmal.episode_lineage.v1',
              'train':{'episode_ids':[],'sha256':[]},'selection':{'episode_ids':[],'sha256':[]}}
     if pretrained is None:
-        members=[VisualLatentMember(network).to(config.device) for _ in range(config.members)]
+        members=[make_member(network).to(config.device) for _ in range(config.members)]
         parent_version=None
     else:
         parent=VisualWorldModel.load(pretrained,device=config.device)
@@ -114,8 +132,12 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
             field='episode_id' if key=='episode_ids' else 'sha256'
             lineage[kind][key]=sorted(set(lineage[kind][key])|{r[field] for r in rows})
     for member in members:
-        for parameter in member.encoder.parameters():
-            parameter.requires_grad_(not freeze_encoder)
+        encoders=[member.encoder]
+        if hasattr(member,'state_encoder'):
+            encoders.append(member.state_encoder)
+        for encoder in encoders:
+            for parameter in encoder.parameters():
+                parameter.requires_grad_(not freeze_encoder)
     optimizers=[torch.optim.AdamW([p for p in m.parameters() if p.requires_grad],
                                  lr=config.learning_rate,weight_decay=config.weight_decay) for m in members]
     # Resample independent EPISODES, preserving all within-episode windows.
@@ -161,18 +183,20 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
                                             loss=f'{train_total/train_count:.4g}',refresh=False)
                         batches.update()
             val_total,val_count=0.,0
-            components={'frame':0.,'state':0.,'latent':0.,'event':0.}
+            components={}
             with progress_bar(len(members)*len(val_loader),f'Validation {epoch+1}/{config.epochs}',
                               enabled=show_progress,position=1,leave=False) as batches, torch.inference_mode():
                 for index,member in enumerate(members):
                     member.eval()
                     for batch in val_loader:
                         loss,parts=batch_loss(member,batch,normalization,config)
+                        if not torch.isfinite(loss):
+                            raise RuntimeError('Nonfinite validation loss; checkpoint not overwritten')
                         size=len(batch['rgb'])
                         val_total+=float(loss)*size
                         val_count+=size
                         for key,value in parts.items():
-                            components[key]+=value*size
+                            components[key]=components.get(key,0.)+value*size
                         batches.set_postfix(member=f'{index+1}/{len(members)}',
                                             loss=f'{val_total/val_count:.4g}',refresh=False)
                         batches.update()
