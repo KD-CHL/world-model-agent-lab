@@ -12,7 +12,7 @@ import time
 
 import numpy as np
 
-from wmal.agents.predictive_skill_agent import AgentTask, PredictiveSkillAgent, SkillCandidate
+from wmal.agents.predictive_skill_agent import AgentTask, TaskStage, PredictiveSkillAgent, SkillCandidate
 from wmal.envs.visual_workcell import VisualWorkcellSession, TARGET_LOW, TARGET_HIGH, MAX_DELTA
 from wmal.logging.manifest import atomic_json, build_manifest
 from wmal.models.horizon_calibration import HorizonCalibration
@@ -49,12 +49,21 @@ def fixed_joint_plan(start,goal,budget):
     return np.asarray(result)
 
 
-def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_budget,seed,log,artifact_dir):
+def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_budget,seed,log,artifact_dir,
+             waypoints=()):
     goal=np.asarray(goal,dtype=float)
     if goal.shape!=(2,) or not np.isfinite(goal).all() or np.any(goal<TARGET_LOW) or np.any(goal>TARGET_HIGH):
         raise ValueError('Goal must contain shoulder/elbow targets within the local envelope')
     state_goal=np.concatenate([goal,goal])
-    task=AgentTask(f'arm_goal_{seed}',state_goal,('arm_delta',),tolerance=.035,max_cycles=max_cycles)
+    points=[np.asarray(point,dtype=float) for point in waypoints]
+    if any(p.shape!=(2,) or not np.isfinite(p).all() or np.any(p<TARGET_LOW) or np.any(p>TARGET_HIGH) for p in points):
+        raise ValueError('Waypoints must contain shoulder/elbow targets within the local envelope')
+    stages=tuple(TaskStage(f'waypoint_{i+1}',np.tile(p,2)) for i,p in enumerate(points))
+    if stages:
+        stages+= (TaskStage('final_goal',state_goal),)
+    if baseline=='A0' and points and horizon!=1:
+        raise ValueError('A0 waypoint experiment requires horizon=1 to audit each intermediate target')
+    task=AgentTask(f'arm_goal_{seed}',state_goal,('arm_delta',),tolerance=.035,max_cycles=max_cycles,stages=stages)
     agent=PredictiveSkillAgent(task,model,calibration,baseline=baseline,error_budget=error_budget,
             action_lower=[-MAX_DELTA]*2,action_upper=[MAX_DELTA]*2,
             state_lower=np.concatenate([TARGET_LOW-.15,TARGET_LOW]),
@@ -69,9 +78,20 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
         log.flush()
     emit('task_started',{'schema':'wmal.monitor.task.v1','goal':state_goal.tolist(),
                         'baseline':baseline,'max_cycles':max_cycles,'callable_skills':list(task.callable_skills),
-                        'model_version':model.version,'semantics':session.semantics})
+                        'model_version':model.version,'semantics':session.semantics,
+                        'stages':[{'name':s.name,'target':s.target.tolist()} for s in stages]})
     emit('agent_state',{'state':asdict(agent.state)})
     frozen=fixed_joint_plan(observed.state[2:],goal,max_cycles) if baseline=='A0' else None
+    if baseline=='A0' and points:
+        # Fixed once from the initial nominal state. No actual-state correction.
+        previous=observed.state[2:]
+        segments=[]
+        for point in points+[goal]:
+            steps=max(1,int(np.ceil(np.max(np.abs(point-previous))/.04)))
+            segments.append(fixed_joint_plan(previous,point,steps))
+            segments.append(np.zeros((1,2)))  # nominal settle, not a synthetic success
+            previous=point
+        frozen=np.concatenate(segments+[np.zeros((max_cycles,2))])[:max_cycles]
     started=time.perf_counter()
     reobservations=0
     for cycle in range(max_cycles+3):
@@ -81,7 +101,7 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
             offset=agent.state.executed_cycles
             available=[SkillCandidate('arm_delta',frozen[offset:offset+horizon])]
         else:
-            available=candidates(observed,state_goal,horizon,rng)
+            available=candidates(observed,agent.active_stage.target,horizon,rng)
         decision=agent.plan(observed,available)
         record={'cycle':cycle,'episode_id':observed.episode_id,'step_id':observed.step_id,
                 'decision_id':decision.decision_id,'status':decision.status,'prefix_length':decision.prefix_length,
@@ -141,6 +161,8 @@ def main():
     parser.add_argument('--calibration')
     parser.add_argument('--task',default='stack_block')
     parser.add_argument('--goal',nargs=2,type=float,default=[.45,.95])
+    parser.add_argument('--waypoints',nargs='+',type=float,default=[],
+                        help='Ordered shoulder/elbow pairs before the final --goal')
     parser.add_argument('--baseline',choices=['A0','A1','A2','A3'],default='A3')
     parser.add_argument('--horizon',type=int,default=4)
     parser.add_argument('--max-cycles',type=int,default=30)
@@ -154,6 +176,13 @@ def main():
     parser.add_argument('--monitor-runs-root',default='runs')
     parser.add_argument('--realtime',action='store_true',help='Pace action execution at simulation time')
     args=parser.parse_args()
+    if len(args.waypoints)%2:
+        parser.error('Waypoints must be shoulder/elbow pairs')
+    waypoints=np.asarray(args.waypoints,dtype=float).reshape(-1,2).tolist()
+    if any(not np.isfinite(p).all() or np.any(p<TARGET_LOW) or np.any(p>TARGET_HIGH) for p in map(np.asarray,waypoints)):
+        parser.error('Waypoints outside local shoulder/elbow envelope')
+    if args.baseline=='A0' and waypoints and args.horizon!=1:
+        parser.error('A0 waypoint experiment requires --horizon 1')
     import torch
     torch.set_num_threads(1)
     model=VisualWorldModel.load(args.checkpoint,device=args.device)
@@ -171,7 +200,8 @@ def main():
         inputs['calibration']=args.calibration
     atomic_json(output/'run_manifest.json',build_manifest('visual_skill_agent',args.seed,inputs,
                 parameters={'task':args.task,'goal':args.goal,'baseline':args.baseline,'max_cycles':args.max_cycles,
-                            'horizon':args.horizon,'error_budget':args.error_budget,'realtime':args.realtime},
+                            'horizon':args.horizon,'error_budget':args.error_budget,'realtime':args.realtime,
+                            'waypoints':waypoints},
                 semantics=model.semantics,model_version=model.version))
     try:
         with ExitStack() as stack:
@@ -193,7 +223,7 @@ def main():
                 while True:
                     report=run_task(session,model,calibration,goal,baseline=args.baseline,horizon=args.horizon,
                         max_cycles=args.max_cycles,error_budget=args.error_budget,seed=args.seed+task_index,
-                        log=log,artifact_dir=output)
+                        log=log,artifact_dir=output,waypoints=waypoints if task_index==0 else ())
                     atomic_json(output/f'task_{task_index:03d}.json',report)
                     print(json.dumps(report,ensure_ascii=False,indent=2),flush=True)
                     if viewer is None and monitor is None:

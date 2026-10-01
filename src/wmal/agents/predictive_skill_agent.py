@@ -11,6 +11,12 @@ from uuid import uuid4
 import numpy as np
 
 
+def _snapshot(value):
+    """Immutable bytes backing also prevents callers re-enabling write flags."""
+    array=np.asarray(value,dtype=float)
+    return np.frombuffer(array.tobytes(),dtype=array.dtype).reshape(array.shape)
+
+
 @dataclass(frozen=True)
 class VisualObservation:
     episode_id: str
@@ -24,12 +30,20 @@ class VisualObservation:
                 or rgb.ndim!=3 or rgb.shape[0]!=3 or not np.isfinite(rgb).all()
                 or rgb.min()<0 or rgb.max()>1 or state.ndim!=1 or not np.isfinite(state).all()):
             raise ValueError('Invalid visual observation')
+        object.__setattr__(self,'rgb',_snapshot(rgb))
+        object.__setattr__(self,'state',_snapshot(state))
 
 
 @dataclass(frozen=True)
 class TaskStage:
     name: str
     target: np.ndarray
+
+    def __post_init__(self):
+        target=np.asarray(self.target)
+        if not isinstance(self.name,str) or not self.name or target.ndim!=1 or not np.isfinite(target).all():
+            raise ValueError('Invalid task stage')
+        object.__setattr__(self,'target',_snapshot(target))
 
 
 @dataclass(frozen=True)
@@ -57,6 +71,9 @@ class AgentTask:
                     raise ValueError('Invalid stage target')
             if not np.array_equal(self.stages[-1].target,goal):
                 raise ValueError('Final stage must match task goal')
+        object.__setattr__(self,'goal',_snapshot(goal))
+        object.__setattr__(self,'stages',tuple(self.stages))
+        object.__setattr__(self,'callable_skills',tuple(self.callable_skills))
 
 
 @dataclass(frozen=True)
@@ -64,6 +81,11 @@ class SkillCandidate:
     skill: str
     actions: np.ndarray
     nominal_terminal: np.ndarray | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self,'actions',_snapshot(self.actions))
+        if self.nominal_terminal is not None:
+            object.__setattr__(self,'nominal_terminal',_snapshot(self.nominal_terminal))
 
 
 @dataclass
@@ -77,6 +99,10 @@ class ResearchAgentState:
     status: str = 'running'
     executed_cycles: int = 0
     replans: int = 0
+    active_subgoal: str | None = None
+    decision_count: int = 0
+    reobservations: int = 0
+    belief: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -94,12 +120,21 @@ class SkillDecision:
     evidence: dict
     status: str = 'execute'
 
+    def __post_init__(self):
+        for name in ('actions','predicted_states','predicted_frames','error_bounds'):
+            value=getattr(self,name)
+            if value is not None:
+                object.__setattr__(self,name,_snapshot(value))
+
 
 class PredictiveSkillAgent:
     def __init__(self,task,predictor,calibration=None,*,baseline='A3',error_budget=.5,
-                 action_lower,action_upper,state_lower=None,state_upper=None):
+                 action_lower,action_upper,state_lower=None,state_upper=None,max_reobservations=3):
         if baseline not in ('A0','A1','A2','A3') or not math.isfinite(error_budget) or error_budget<=0:
             raise ValueError('Invalid Agent baseline or error budget')
+        if type(max_reobservations) is not int or max_reobservations<1:
+            raise ValueError('Invalid reobservation budget')
+        self.max_reobservations=max_reobservations
         semantics=predictor.semantics
         lower,upper=np.asarray(action_lower),np.asarray(action_upper)
         if (lower.shape!=(len(semantics['action_order']),) or upper.shape!=lower.shape
@@ -112,7 +147,7 @@ class PredictiveSkillAgent:
             calibration.validate_for(predictor.version,semantics)
         self.task,self.predictor,self.calibration=task,predictor,calibration
         self.baseline,self.error_budget=baseline,error_budget
-        self.lower,self.upper=lower,upper
+        self.lower,self.upper=_snapshot(lower),_snapshot(upper)
         self.state_lower=None if state_lower is None else np.asarray(state_lower,dtype=float)
         self.state_upper=None if state_upper is None else np.asarray(state_upper,dtype=float)
         if (self.state_lower is None)!=(self.state_upper is None):
@@ -124,6 +159,7 @@ class PredictiveSkillAgent:
         normalization=getattr(predictor,'normalization',{})
         self.scale=np.asarray(normalization.get('state_scale',np.ones(len(task.goal))))
         self.state=ResearchAgentState(np.asarray(task.goal).tolist(),list(task.callable_skills))
+        self.state.active_subgoal=self._target().name
         self._pending=None
         self._episode=None
         self._step=None
@@ -133,11 +169,27 @@ class PredictiveSkillAgent:
         stages=self.task.stages or (TaskStage(self.task.task_id,self.task.goal),)
         return stages[min(len(self.state.completed_subgoals),len(stages)-1)]
 
+    @property
+    def active_stage(self):
+        """Controller proposals must target this stage, not skip to the final goal."""
+        return self._target()
+
+    def _update_belief(self,observation):
+        self.state.belief.update(episode_id=observation.episode_id,step_id=observation.step_id,
+                                model_version=self.predictor.version,observed_state=observation.state.tolist(),
+                                conditioning='current_real_observation',latent_memory='not_enabled')
+
     def _reobserve(self,observation,reason,started):
         self.state.failure_reason=reason
+        if self.state.status=='running':
+            self.state.reobservations+=1
+            if self.state.reobservations>=self.max_reobservations:
+                self.state.status='needs_review'
         return SkillDecision(str(uuid4()),observation.episode_id,observation.step_id,None,
                 np.empty((0,len(self.lower))),0,self.predictor.version,None,None,None,
-                {'baseline':self.baseline,'reason':reason,'planning_ms':(time.perf_counter()-started)*1000},'reobserve')
+                {'baseline':self.baseline,'reason':reason,
+                 'reobservations_remaining':max(0,self.max_reobservations-self.state.reobservations),
+                 'planning_ms':(time.perf_counter()-started)*1000},'reobserve')
 
     def plan(self,observation,candidates):
         started=time.perf_counter()
@@ -148,6 +200,8 @@ class PredictiveSkillAgent:
                 or (self._step is not None and observation.step_id!=self._step)):
             raise ValueError('Stale observation or unexpected episode')
         self._episode,self._step=observation.episode_id,observation.step_id
+        self.state.decision_count+=1
+        self._update_belief(observation)
         if not candidates:
             return self._reobserve(observation,'no_candidate',started)
         for candidate in candidates:
@@ -168,7 +222,7 @@ class PredictiveSkillAgent:
         ranked,evidence=[],[]
         for index,candidate in enumerate(candidates):
             actions=np.asarray(candidate.actions)[:remaining]
-            mean,frames,bounds=None,None,None
+            mean,frames,bounds,diagnostics=None,None,None,None
             prefix=len(actions)
             score=float(index)  # A0: fixed plan ordering, no model query.
             if self.baseline=='A1':
@@ -189,6 +243,7 @@ class PredictiveSkillAgent:
                         or not np.isfinite(values).all() or not np.isfinite(video).all()):
                     raise ValueError('Malformed/stale world-model response')
                 mean,frames=values.mean(0),video.mean(0)
+                diagnostics=result.get('diagnostics')
                 if self.baseline=='A3':
                     self.calibration.validate_for(self.predictor.version,self.predictor.semantics)
                     bounds=self.calibration.bounds(values.std(0),version=self.predictor.version)
@@ -206,26 +261,29 @@ class PredictiveSkillAgent:
             evidence.append({'candidate':index,'skill':candidate.skill,'trusted_prefix':prefix,
                              'score':score if prefix else None})
             if prefix:
-                ranked.append((score,index,candidate,actions,prefix,mean,frames,bounds))
+                ranked.append((score,index,candidate,actions,prefix,mean,frames,bounds,diagnostics))
         self.state.replans+=1
         if not ranked:
             return self._reobserve(observation,'no_trusted_prefix',started)
-        score,index,candidate,actions,prefix,mean,frames,bounds=min(ranked,key=lambda r:(r[0],r[1]))
+        score,index,candidate,actions,prefix,mean,frames,bounds,diagnostics=min(ranked,key=lambda r:(r[0],r[1]))
         decision=SkillDecision(str(uuid4()),observation.episode_id,observation.step_id,candidate.skill,
                 actions[:prefix].copy(),prefix,self.predictor.version,mean,frames,bounds,
                 {'baseline':self.baseline,'selected_candidate':index,'score':score,'candidates':evidence,
-                 'planning_ms':(time.perf_counter()-started)*1000,'target_stage':self._target().name})
+                 'planning_ms':(time.perf_counter()-started)*1000,'target_stage':self._target().name,
+                 'world_model_diagnostics':diagnostics,
+                 'trust_mechanism':'held_out_calibrated_error_bound' if bounds is not None else 'not_calibrated'})
         self._pending=decision
         self.state.failure_reason=None
         return decision
 
     def record_feedback(self,decision,observation):
-        if (self._pending is None or decision.decision_id!=self._pending.decision_id
+        if (decision is not self._pending or self._pending is None
                 or decision.model_version!=self.predictor.version or observation.episode_id!=decision.episode_id
                 or observation.step_id!=decision.step_id+decision.prefix_length
                 or np.asarray(observation.state).shape!=np.asarray(self.task.goal).shape):
             raise ValueError('Feedback is stale, duplicated, incomplete or from another episode/model')
         feedback={'decision_id':decision.decision_id,'skill':decision.skill,
+                  'target_stage':self._target().name,
                   'executed_prefix':decision.prefix_length,'model_version':decision.model_version,
                   'observed_state':np.asarray(observation.state).tolist()}
         if decision.predicted_states is not None:
@@ -241,21 +299,27 @@ class PredictiveSkillAgent:
                 if mismatch:
                     self.state.failure_reason='prediction_mismatch'
         self.state.executed_cycles+=decision.prefix_length
+        self.state.reobservations=0
         self.state.recent_feedback=feedback
         self._pending=None
         self._step=observation.step_id
+        self._update_belief(observation)
+        self.state.belief.update(last_prediction_error=feedback.get('state_error'),
+                                outside_calibration=feedback.get('outside_calibration'),
+                                world_model_diagnostics=decision.evidence.get('world_model_diagnostics'))
         stage=self._target()
         if np.linalg.norm(observation.state-stage.target)<=self.task.tolerance:
             self.state.completed_subgoals.append(stage.name)
             if len(self.state.completed_subgoals)==len(self.task.stages or (stage,)):
                 self.state.status='succeeded'
+        self.state.active_subgoal=None if self.state.status=='succeeded' else self._target().name
         if self.state.status=='running' and self.state.executed_cycles>=self.task.max_cycles:
             self.state.status='budget_exhausted'
         return feedback
 
     def record_execution_failure(self,decision,observation,reason):
         """Known partial receipt: account real progress, stop; never retry uncertain actions."""
-        if (self._pending is None or decision.decision_id!=self._pending.decision_id
+        if (decision is not self._pending or self._pending is None
                 or observation.episode_id!=decision.episode_id
                 or not decision.step_id<=observation.step_id<=decision.step_id+decision.prefix_length
                 or not isinstance(reason,str) or not reason):
@@ -269,3 +333,4 @@ class PredictiveSkillAgent:
                                     'status':'execution_failed','reason':reason}
         self._pending=None
         self._step=observation.step_id
+        self._update_belief(observation)
