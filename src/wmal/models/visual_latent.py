@@ -24,12 +24,20 @@ class NetworkConfig:
     latent_dim: int = 64
     hidden_dim: int = 128
     event_dim: int = 0
+    architecture: str = 'deterministic'
+    stoch: int = 8
+    classes: int = 8
+    unimix: float = .01
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in
                 (self.state_dim,self.action_dim,self.latent_dim,self.hidden_dim))
                 or self.image_size not in (32,64,128) or type(self.event_dim) is not int or self.event_dim<0):
             raise ValueError('Invalid visual network dimensions')
+        if (self.architecture not in ('deterministic','categorical_rssm')
+                or any(type(v) is not int or v<2 for v in (self.stoch,self.classes))
+                or not np.isfinite(self.unimix) or not 0<self.unimix<1):
+            raise ValueError('Invalid RSSM architecture or categorical dimensions')
 
 
 class VisualLatentMember(nn.Module):
@@ -78,8 +86,20 @@ class VisualLatentMember(nn.Module):
                 'event_logits':torch.stack(events,1) if events else None}
 
 
+def make_member(config):
+    if config.architecture=='categorical_rssm':
+        from wmal.models.categorical_rssm import CategoricalRSSMMember
+        return CategoricalRSSMMember(config)
+    return VisualLatentMember(config)
+
+
 def _version(config, semantics, normalization, states):
-    digest=hashlib.sha256(json.dumps({'config':asdict(config),'semantics':semantics,
+    configuration=asdict(config)
+    if config.architecture=='deterministic':
+        # v2 checksums predate these fields: don't invalidate existing calibration.
+        for key in ('architecture','stoch','classes','unimix'):
+            configuration.pop(key)
+    digest=hashlib.sha256(json.dumps({'config':configuration,'semantics':semantics,
                                      'normalization':normalization},sort_keys=True).encode())
     for state in states:
         for key,tensor in sorted(state.items()):
@@ -119,7 +139,7 @@ class VisualWorldModel:
         normalized_actions=(actions-np.asarray(norm['action_mean']))/np.asarray(norm['action_scale'])
         inputs=[torch.as_tensor(v,dtype=torch.float32,device=self.device)[None]
                 for v in (rgb,normalized_state,normalized_actions)]
-        states,frames,events=[],[],[]
+        states,frames,events,diagnostics=[],[],[],[]
         with torch.inference_mode():
             for member in self.members:
                 output=member.imagine(*inputs)
@@ -127,8 +147,17 @@ class VisualWorldModel:
                 frames.append(output['rgb'][0].cpu().numpy())
                 if output['event_logits'] is not None:
                     events.append(output['event_logits'][0].sigmoid().cpu().numpy())
+                if 'prior_entropy' in output:
+                    diagnostics.append({'prior_entropy':output['prior_entropy'][0].cpu().tolist(),
+                                        'posterior_entropy':float(output['posterior_entropy'][0])})
+        if not all(np.isfinite(v).all() for v in states+frames+events):
+            raise RuntimeError('Nonfinite world-model prediction; refuse candidate')
         return {'model_version':self.version,'states':np.stack(states),'frames':np.stack(frames),
-                'event_probabilities':np.stack(events) if events else None}
+                'event_probabilities':np.stack(events) if events else None,
+                'diagnostics':{'architecture':self.config.architecture,
+                               'inference_mode':'categorical_probability_proxy' if diagnostics else 'deterministic',
+                               'uncertainty_kind':'ensemble_spread_not_calibrated',
+                               'members':diagnostics}}
 
     def predict_video(self, observation_history, action_sequence):
         """VideoPredictionProvider interface: history entries contain rgb/state/semantics."""
@@ -157,7 +186,7 @@ class VisualWorldModel:
         for weights in payload['members']:
             if any(not torch.isfinite(value).all() for value in weights.values()):
                 raise ValueError('Nonfinite checkpoint weights')
-            member=VisualLatentMember(config)
+            member=make_member(config)
             member.load_state_dict(weights,strict=True)
             members.append(member)
         result=cls(config,payload['semantics'],payload['normalization'],members,
