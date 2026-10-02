@@ -28,6 +28,7 @@ class NetworkConfig:
     stoch: int = 8
     classes: int = 8
     unimix: float = .01
+    context_steps: int = 0
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in
@@ -38,6 +39,9 @@ class NetworkConfig:
                 or any(type(v) is not int or v<2 for v in (self.stoch,self.classes))
                 or not np.isfinite(self.unimix) or not 0<self.unimix<1):
             raise ValueError('Invalid RSSM architecture or categorical dimensions')
+        if (type(self.context_steps) is not int or self.context_steps < 0
+                or self.context_steps and self.architecture != 'categorical_rssm'):
+            raise ValueError('Real history context requires a categorical RSSM and nonnegative integer steps')
 
 
 class VisualLatentMember(nn.Module):
@@ -95,6 +99,8 @@ def make_member(config):
 
 def _version(config, semantics, normalization, states):
     configuration=asdict(config)
+    if not config.context_steps:
+        configuration.pop('context_steps')  # Preserve all pre-context checkpoint identities.
     if config.architecture=='deterministic':
         # v2 checksums predate these fields: don't invalidate existing calibration.
         for key in ('architecture','stoch','classes','unimix'):
@@ -134,24 +140,43 @@ class VisualWorldModel:
         self.version=_version(config,semantics,normalization,[m.state_dict() for m in members])
 
     def predict(self, rgb, state, actions):
+        if self.config.context_steps:
+            raise ValueError('Temporal model requires explicit predict_context, including startup history')
+        return self.predict_context(np.asarray(rgb)[None], np.asarray(state)[None],
+                                    np.empty((0, self.config.action_dim)), actions)
+
+    def predict_context(self, rgb, state, past_actions, actions):
+        """Posterior from bounded REAL history, followed by action-only prior rollout.
+
+        History includes the current observation; past_actions connect its T frames.
+        Each call rebuilds a clean carry, so candidate branches share no mutable latent.
+        """
         rgb,state,actions=np.asarray(rgb),np.asarray(state),np.asarray(actions)
+        past_actions=np.asarray(past_actions)
         size=self.config.image_size
-        if (rgb.shape!=(3,size,size) or state.shape!=(self.config.state_dim,)
+        t=len(state) if state.ndim == 2 else 0
+        if (not 1 <= t <= self.config.context_steps+1
+                or rgb.shape!=(t,3,size,size) or state.shape!=(t,self.config.state_dim)
+                or past_actions.shape!=(t-1,self.config.action_dim)
                 or actions.ndim!=2 or actions.shape[1]!=self.config.action_dim or len(actions)<1
-                or not all(np.isfinite(v).all() for v in (rgb,state,actions))
+                or not all(np.isfinite(v).all() for v in (rgb,state,past_actions,actions))
                 or rgb.min()<0 or rgb.max()>1):
-            raise ValueError('Expected finite CHW RGB [0,1], state and [H,A] candidate actions')
+            raise ValueError('Expected bounded aligned real context [T,CHW], [T,D], [T-1,A] and [H,A] actions')
         if len(actions)>self.metadata.get('max_horizon',len(actions)):
             raise ValueError('Candidate horizon exceeds trained horizon')
         norm=self.normalization
         normalized_state=(state-np.asarray(norm['state_mean']))/np.asarray(norm['state_scale'])
         normalized_actions=(actions-np.asarray(norm['action_mean']))/np.asarray(norm['action_scale'])
+        normalized_past=(past_actions-np.asarray(norm['action_mean']))/np.asarray(norm['action_scale'])
         inputs=[torch.as_tensor(v,dtype=torch.float32,device=self.device)[None]
-                for v in (rgb,normalized_state,normalized_actions)]
+                for v in (rgb,normalized_state,normalized_past,normalized_actions)]
         states,frames,events,diagnostics=[],[],[],[]
         with torch.inference_mode():
             for member in self.members:
-                output=member.imagine(*inputs)
+                if self.config.architecture == 'categorical_rssm':
+                    output=member.imagine_context(*inputs)
+                else:
+                    output=member.imagine(inputs[0][:, -1],inputs[1][:, -1],inputs[3])
                 states.append(output['state'][0].cpu().numpy()*norm['state_scale']+norm['state_mean'])
                 frames.append(output['rgb'][0].cpu().numpy())
                 if output['event_logits'] is not None and self.event_supervised_channels.any():
@@ -166,12 +191,55 @@ class VisualWorldModel:
                 'event_probability_names':[name for name,enabled in
                     zip(self.semantics.get('event_names',[]),self.event_supervised_channels) if enabled],
                 'diagnostics':{'architecture':self.config.architecture,
+                               'conditioning':'bounded_real_history' if self.config.context_steps else 'current_real_observation',
+                               'context_steps_used':t-1,
+                               'context_steps_limit':self.config.context_steps,
                                'inference_mode':'categorical_probability_proxy' if diagnostics else 'deterministic',
                                'uncertainty_kind':'ensemble_spread_not_calibrated',
                                'members':diagnostics}}
 
+    def predict_sample(self, sample, *, actions=None):
+        """Offline adapter removes startup padding, never passes future target frames."""
+        k=self.config.context_steps
+        length=sample.get('context_length',0)
+        if (sample.get('prediction_offset',0)!=k or type(length) is not int
+                or not 0 <= length <= k):
+            raise ValueError('Dataset sample context protocol differs from model')
+        return self.predict_context(sample['rgb'][k-length:k+1],sample['states'][k-length:k+1],
+                                    sample['actions'][k-length:k],
+                                    sample['actions'][k:] if actions is None else actions)
+
     def predict_video(self, observation_history, action_sequence):
-        """VideoPredictionProvider interface: history entries contain rgb/state/semantics."""
+        """Video provider adapter; temporal entries need episode/step and incoming action.
+
+        Only the last K+1 REAL observations condition the model. The action at
+        history[i]['action_from_previous'] connects history[i-1] to history[i].
+        Generated video is returned, never added to the real observation ledger.
+        """
+        if self.config.context_steps:
+            history=observation_history[-self.config.context_steps-1:]
+            if not history:
+                raise ValueError('Video provider requires nonempty real context')
+            rgbs,states,past=[],[],[]
+            for i,entry in enumerate(history):
+                rgb=np.asarray(entry.get('rgb'))
+                if (entry.get('semantics')!=self.semantics
+                        or rgb.dtype!=np.uint8 or rgb.shape!=(self.config.image_size,self.config.image_size,3)
+                        or not isinstance(entry.get('episode_id'),str) or not entry['episode_id']
+                        or type(entry.get('step_id')) is not int or entry['step_id']<0):
+                    raise ValueError('Temporal video history requires aligned RGB, semantics and real episode/step IDs')
+                if i:
+                    previous=history[i-1]
+                    action=np.asarray(entry.get('action_from_previous'),dtype=float)
+                    if (entry['episode_id']!=previous['episode_id'] or entry['step_id']!=previous['step_id']+1
+                            or action.shape!=(self.config.action_dim,) or not np.isfinite(action).all()):
+                        raise ValueError('Temporal video context has missing or noncontiguous actual actions/observations')
+                    past.append(action)
+                rgbs.append(rgb.transpose(2,0,1).astype('float32')/255.)
+                states.append(entry['state'])
+            result=self.predict_context(np.stack(rgbs),np.asarray(states),
+                                        np.asarray(past).reshape(-1,self.config.action_dim),action_sequence)
+            return np.rint(result['frames'].mean(0).transpose(0,2,3,1)*255).clip(0,255).astype('uint8')
         observation=observation_history[-1]
         if observation.get('semantics')!=self.semantics:
             raise ValueError('Observation/control semantics differ from model')

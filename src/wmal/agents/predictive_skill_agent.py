@@ -166,6 +166,11 @@ class PredictiveSkillAgent:
         self._episode=None
         self._step=None
         self._force_reobserve=False
+        self.context_steps=getattr(getattr(predictor,'config',None),'context_steps',0)
+        self._history=None
+        if self.context_steps:
+            from wmal.agents.observation_history import ObservationHistory
+            self._history=ObservationHistory(self.context_steps,len(self.lower))
 
     def _target(self):
         stages=self.task.stages or (TaskStage(self.task.task_id,self.task.goal),)
@@ -180,6 +185,8 @@ class PredictiveSkillAgent:
         self.state.belief.update(episode_id=observation.episode_id,step_id=observation.step_id,
                                 model_version=self.predictor.version,observed_state=observation.state.tolist(),
                                 conditioning='current_real_observation',latent_memory='not_enabled')
+        if self._history is not None:
+            self.state.belief.update(self._history.describe())
 
     def _reobserve(self,observation,reason,started):
         self.state.failure_reason=reason
@@ -201,6 +208,8 @@ class PredictiveSkillAgent:
                 or (self._episode is not None and observation.episode_id!=self._episode)
                 or (self._step is not None and observation.step_id!=self._step)):
             raise ValueError('Stale observation or unexpected episode')
+        if self._history is not None:
+            self._history.observe_current(observation)
         self._episode,self._step=observation.episode_id,observation.step_id
         self.state.decision_count+=1
         self._update_belief(observation)
@@ -235,7 +244,10 @@ class PredictiveSkillAgent:
                     raise ValueError('Invalid nominal outcome')
                 score=float(np.linalg.norm((terminal-target)/self.scale))
             elif self.baseline in ('A2','A3'):
-                result=self.predictor.predict(observation.rgb,observation.state,actions)
+                if self._history is not None:
+                    result=self.predictor.predict_context(*self._history.inputs(),actions)
+                else:
+                    result=self.predictor.predict(observation.rgb,observation.state,actions)
                 values=np.asarray(result['states'])
                 video=np.asarray(result['frames'])
                 if (result['model_version']!=self.predictor.version or values.ndim!=3
@@ -293,12 +305,14 @@ class PredictiveSkillAgent:
                 raise ValueError('Execution receipt array metadata/content changed')
         return expected
 
-    def record_feedback(self,decision,observation):
+    def record_feedback(self,decision,observation,*,observations=None):
         decision=self._receipt(decision)
         if (decision.model_version!=self.predictor.version or observation.episode_id!=decision.episode_id
                 or observation.step_id!=decision.step_id+decision.prefix_length
                 or np.asarray(observation.state).shape!=np.asarray(self.task.goal).shape):
             raise ValueError('Feedback is stale, duplicated, incomplete or from another episode/model')
+        trace=None if self._history is None else self._history.validate_execution(
+            observation,decision.actions,observations)
         feedback={'decision_id':decision.decision_id,'skill':decision.skill,
                   'target_stage':self._target().name,
                   'executed_prefix':decision.prefix_length,'model_version':decision.model_version,
@@ -308,13 +322,30 @@ class PredictiveSkillAgent:
             error=np.abs(observation.state-expected)
             feedback.update(predicted_state=expected.tolist(),state_error=float(np.sqrt(np.mean(error**2))),
                             frame_mse=float(np.mean((observation.rgb-decision.predicted_frames[decision.prefix_length-1])**2)))
+            if trace is not None:
+                trace_states=np.stack([v.state for v in trace])
+                trace_rgb=np.stack([v.rgb for v in trace])
+                trace_error=np.abs(trace_states-decision.predicted_states[:decision.prefix_length])
+                feedback.update(observed_states_by_step=trace_states.tolist(),
+                                state_rmse_by_step=np.sqrt(np.mean(trace_error**2,axis=-1)).tolist(),
+                                frame_mse_by_step=np.mean((trace_rgb-decision.predicted_frames[:decision.prefix_length])**2,
+                                                         axis=(1,2,3)).tolist())
             if decision.error_bounds is not None:
                 bound=decision.error_bounds[decision.prefix_length-1]
                 mismatch=bool(np.any(error>bound))
+                if trace is not None:
+                    violations=np.any(trace_error>decision.error_bounds[:decision.prefix_length],axis=-1)
+                    mismatch=bool(violations.any())
+                    feedback.update(outside_calibration_by_step=violations.tolist(),
+                                    first_mismatch_step_id=trace[int(np.flatnonzero(violations)[0])].step_id
+                                    if mismatch else None)
                 feedback.update(error_bound=bound.tolist(),outside_calibration=mismatch)
                 self._force_reobserve=mismatch
                 if mismatch:
                     self.state.failure_reason='prediction_mismatch'
+        if self._history is not None:
+            self._history.commit_execution(trace,decision.actions)
+            feedback['history_step_ids']=[v.step_id for v in trace]
         self.state.executed_cycles+=decision.prefix_length
         self.state.reobservations=0
         self.state.recent_feedback=feedback
@@ -353,3 +384,6 @@ class PredictiveSkillAgent:
         self._pending_payload=None
         self._step=observation.step_id
         self._update_belief(observation)
+        if self._history is not None:
+            # A partial failure cannot manufacture missing intermediate frames.
+            self.state.belief['context_valid']=False

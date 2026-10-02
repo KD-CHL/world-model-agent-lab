@@ -42,6 +42,7 @@ class VisualTrainingConfig:
     rep_weight: float = .1
     free_nats: float = 1.
     reconstruction_weight: float = 1.
+    context_steps: int = 0
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in (self.epochs,self.members,self.batch_size,
@@ -53,7 +54,7 @@ class VisualTrainingConfig:
                 or self.frame_weight<=0 or self.state_weight<=0):
             raise ValueError('Invalid visual training configuration')
         NetworkConfig(1,1,architecture=self.architecture,stoch=self.stoch,
-                      classes=self.classes,unimix=self.unimix)
+                      classes=self.classes,unimix=self.unimix,context_steps=self.context_steps)
         if any(not math.isfinite(v) or v<0 for v in
                (self.dyn_weight,self.rep_weight,self.free_nats,self.reconstruction_weight)):
             raise ValueError('Invalid RSSM loss configuration')
@@ -97,8 +98,8 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     if config.device.startswith('cuda') and not torch.cuda.is_available():
         raise ValueError('CUDA requested but unavailable')
     training_status(f'Checking training/validation dataset hashes: {Path(manifest).resolve()}',enabled=show_progress)
-    train=VisualDataset(manifest,'train',horizon=config.horizon)
-    validation=VisualDataset(manifest,'validation',horizon=config.horizon)
+    train=VisualDataset(manifest,'train',horizon=config.horizon,context_steps=config.context_steps)
+    validation=VisualDataset(manifest,'validation',horizon=config.horizon,context_steps=config.context_steps)
     source=train.manifest['source']
     source_kind=source.get('kind','unknown') if isinstance(source,dict) else (
         source if isinstance(source,str) else 'unknown')
@@ -111,7 +112,7 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
                           image_size=semantics['image_size'],latent_dim=config.latent_dim,
                           hidden_dim=config.hidden_dim,event_dim=len(semantics.get('event_names',[])),
                           architecture=config.architecture,stoch=config.stoch,
-                          classes=config.classes,unimix=config.unimix)
+                          classes=config.classes,unimix=config.unimix,context_steps=config.context_steps)
     normalization=train.normalization()
     lineage={'schema':'wmal.episode_lineage.v1',
              'train':{'episode_ids':[],'sha256':[]},'selection':{'episode_ids':[],'sha256':[]}}
@@ -239,7 +240,7 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
 def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None):
     from wmal.models.horizon_calibration import HorizonCalibration
     model=VisualWorldModel.load(checkpoint,device=device)
-    dataset=VisualDataset(manifest,'test',horizon=horizon)
+    dataset=VisualDataset(manifest,'test',horizon=horizon,context_steps=model.config.context_steps)
     if dataset.semantics!=model.semantics:
         raise ValueError('Evaluation dataset/control semantics mismatch')
     lineage=read_episode_lineage(model.metadata)
@@ -254,7 +255,11 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
     coverage={}
     for i in range(len(dataset)):
         sample=dataset[i]
-        predicted=model.predict(sample['rgb'][0],sample['states'][0],sample['actions'])
+        predicted=model.predict_sample(sample)
+        counter=model.predict_sample(sample,actions=np.zeros_like(sample['actions'][model.config.context_steps:]))
+        # Keep context away from target metrics and persistence baselines.
+        sample=dict(sample,rgb=sample['rgb'][model.config.context_steps:],
+                    states=sample['states'][model.config.context_steps:])
         mean=predicted['states'].mean(0)
         frames=predicted['frames'].mean(0)
         frame.append(((frames-sample['rgb'][1:])**2).mean((1,2,3)))
@@ -262,7 +267,6 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         persist_frame.append(((sample['rgb'][:1]-sample['rgb'][1:])**2).mean((1,2,3)))
         persist_state.append(((sample['states'][:1]-sample['states'][1:])**2).mean(-1))
         # Counterfactual sensitivity, not an assertion that zero-action targets are known.
-        counter=model.predict(sample['rgb'][0],sample['states'][0],np.zeros_like(sample['actions']))
         sensitivity.append(np.abs(mean-counter['states'].mean(0)).mean(-1))
         frame_sensitivity.append(np.abs(frames-counter['frames'].mean(0)).mean((1,2,3)))
         changed=(np.abs(sample['rgb'][1:]-sample['rgb'][:1]).max(1,keepdims=True)>.02)
@@ -275,6 +279,7 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
             key=sample['episode_id']
             coverage[key]=covered if key not in coverage else coverage[key]&covered
     report={'schema':'wmal.visual_evaluation.v1','split':'test','model_version':model.version,
+            'context_steps':model.config.context_steps,
             'manifest_sha256':sha256_file(manifest),'episodes':len(dataset.rows),'windows':len(dataset),
             'frame_mse_by_horizon':np.mean(frame,0).tolist(),
             'state_rmse_by_horizon':np.sqrt(np.mean(state,0)).tolist(),

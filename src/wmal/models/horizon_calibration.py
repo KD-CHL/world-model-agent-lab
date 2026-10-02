@@ -84,7 +84,7 @@ def calibrate_visual(manifest, checkpoint, output, *, horizon=4, alpha=.1, std_f
     from wmal.datasets.visual_sequences import VisualDataset, read_episode_lineage, assert_unexposed_episodes
     from wmal.models.visual_latent import VisualWorldModel
     model=VisualWorldModel.load(checkpoint,device=device)
-    dataset=VisualDataset(manifest,'calibration',horizon=horizon)
+    dataset=VisualDataset(manifest,'calibration',horizon=horizon,context_steps=model.config.context_steps)
     if dataset.semantics!=model.semantics:
         raise ValueError('Calibration control semantics mismatch')
     lineage=read_episode_lineage(model.metadata)
@@ -95,9 +95,9 @@ def calibrate_visual(manifest, checkpoint, output, *, horizon=4, alpha=.1, std_f
     rows=[]
     for i in range(len(dataset)):
         sample=dataset[i]
-        result=model.predict(sample['rgb'][0],sample['states'][0],sample['actions'])
+        result=model.predict_sample(sample)
         denominator=np.maximum(result['states'].std(0),std_floor*scale)
-        scores=(np.abs(result['states'].mean(0)-sample['states'][1:])/denominator).max(-1)
+        scores=(np.abs(result['states'].mean(0)-sample['states'][model.config.context_steps+1:])/denominator).max(-1)
         rows.append({'episode_id':sample['episode_id'],'split':'calibration','scores':scores.tolist()})
     excluded=lineage['train']['episode_ids']+lineage['selection']['episode_ids']
     excluded += [r['episode_id'] for r in dataset.manifest['episodes'] if r['split']=='test']

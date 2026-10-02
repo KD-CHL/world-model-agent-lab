@@ -90,7 +90,12 @@ class VisualWorkcellSession:
         state=np.concatenate([self.data.qpos[self.qadr],self.data.ctrl[self.aids]]).astype('float32')
         return VisualObservation(self.episode_id,self.step_id,rgb,state)
 
-    def execute_actions(self,actions,*,episode_id,step_id):
+    def execute_actions(self,actions,*,episode_id,step_id,on_observation=None):
+        """Execute committed deltas; optional trace sink receives each actual endpoint.
+
+        A failed sink aborts the session just like a controller failure; do not
+        continue executing actions whose real feedback was not acknowledged.
+        """
         if self.fault_reason is not None:
             raise RuntimeError('Session is fault-latched; explicit reset required')
         actions=np.asarray(actions,dtype=float)
@@ -109,6 +114,8 @@ class VisualWorkcellSession:
                 if not np.isfinite(self.data.qpos).all() or not np.isfinite(self.data.qvel).all():
                     raise RuntimeError('Nonfinite MuJoCo state; abort this session')
                 self.step_id+=1
+                if on_observation is not None:
+                    on_observation(self.observe())
                 self.publish_monitor_frame()
                 if self.viewer is not None:
                     self.viewer.sync()

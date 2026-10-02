@@ -127,10 +127,15 @@ class CategoricalRSSMMember(nn.Module):
 
     def imagine(self, rgb, state, actions, *, sample=False):
         """Only initial real observation is consumed; future steps use the prior."""
-        if actions.ndim != 3 or actions.shape[0] != len(state) or actions.shape[1] < 1:
+        return self.imagine_context(rgb[:, None], state[:, None], actions[:, :0], actions, sample=sample)
+
+    def imagine_context(self, rgb, states, past_actions, actions, *, is_first=None, sample=False):
+        """Consume real prefix ONLY; future rollout has no observation input."""
+        if (actions.ndim != 3 or actions.shape[0] != len(states) or actions.shape[1] < 1
+                or actions.shape[-1] != self.config.action_dim):
             raise ValueError('RSSM candidate actions must have shape [B,H,A], H>=1')
-        start = self.observe(rgb[:, None], state[:, None], actions[:, :0], sample=sample)
-        feature = start['features'][:, 0]
+        start = self.observe(rgb, states, past_actions, is_first=is_first, sample=sample)
+        feature = start['features'][:, -1]
         h, z = feature[:, :self.config.hidden_dim], feature[:, self.config.hidden_dim:]
         features, entropy = [], []
         for action in actions.unbind(1):
@@ -142,5 +147,5 @@ class CategoricalRSSMMember(nn.Module):
         result = self._decode(torch.stack(features, 1))
         result.update(state=symexp(result['state_symlog']),
                       prior_entropy=torch.stack(entropy, 1),
-                      posterior_entropy=start['posterior_entropy'][:, 0])
+                      posterior_entropy=start['posterior_entropy'][:, -1])
         return result

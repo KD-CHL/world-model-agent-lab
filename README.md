@@ -8,6 +8,8 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 新增可切换的 **categorical RSSM 世界模型**：观测后验/动作先验、离散随机状态、balanced KL/free nats、后验重构与先验多步训练；保留确定性网络作对照。Agent 支持真实反馈驱动的有序子目标、有限重观测预算及预测证据账本。只使用 `wmal`，不引入上游项目环境，不训练 actor–critic/controller。见 [RSSM 架构、训练/微调与持续仿真命令](docs/25_rssm_agent.md) 和 [实际验收](docs/architecture/rssm-agent-verification.md)。
 
+进一步新增 **固定真实历史条件的时序 RSSM**：训练、推理、校准共用 K=2 历史协议，Agent 校验逐动作真实执行反馈，并在中间步骤预测超界时触发重新观测。旧 K=0 模型/校准继续兼容；新模型不替换演示默认模型。模块边界、源码依据、完整启动命令与真实测试局限见 [时序世界模型工程指南](docs/27_temporal_world_model_engineering.md)，配置为 `configs/training/rssm_temporal_world.json`。
+
 研究主线：[预测可信度辅助机器人Agent规划与两条训练路线](docs/21_research_plan_prediction_reliability.md)；[数据集核查清单](docs/22_world_model_dataset_catalog.md)。固定技能和任务状态机，当前先验证状态规划网络的训练闭环；视觉动作条件模型保留为独立支线，两条路线均需独立消融。
 
 规划世界模型训练网络：[神经动力学集成的结构、采样、训练、续训和规划接入](docs/architecture/motion-network.md)。入口 `scripts/train_motion_network.py`，支持 `collect`、`train`、`evaluate`；G1 接入配置为 `configs/g1_neural.json`。

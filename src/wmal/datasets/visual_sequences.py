@@ -140,14 +140,16 @@ def _validate_manifest(payload):
 
 class VisualDataset:
     """Lazy windows with a bounded episode cache; no padded or cross-episode targets."""
-    def __init__(self, manifest, split, *, horizon):
+    def __init__(self, manifest, split, *, horizon, context_steps=0):
         self.path = Path(manifest).resolve()
         self.manifest = json.loads(self.path.read_text())
         _validate_manifest(self.manifest)
-        if split not in SPLITS or type(horizon) is not int or horizon < 1:
+        if (split not in SPLITS or type(horizon) is not int or horizon < 1
+                or type(context_steps) is not int or context_steps < 0):
             raise ValueError('Invalid split or horizon')
         self.semantics = self.manifest['semantics']
         self.split, self.horizon = split, horizon
+        self.context_steps = context_steps
         self.rows = [r for r in self.manifest['episodes'] if r['split'] == split]
         self.index, self._cache = [], OrderedDict()
         for i,row in enumerate(self.rows):
@@ -185,10 +187,23 @@ class VisualDataset:
         h = self.horizon
         events = arrays.get('events', np.zeros((len(arrays['actions']),0),dtype='float32'))
         mask = arrays.get('event_mask', np.zeros_like(events))
-        return {'rgb': np.transpose(arrays['rgb'][t:t+h+1],(0,3,1,2)).astype('float32')/255.,
-                'states': arrays['states'][t:t+h+1].astype('float32'),
-                'actions': arrays['actions'][t:t+h].astype('float32'),
+        k=self.context_steps
+        length=min(t,k)
+        padding=k-length
+        frames=arrays['rgb'][t-length:t+h+1]
+        states=arrays['states'][t-length:t+h+1]
+        actions=arrays['actions'][t-length:t+h]
+        if padding:
+            frames=np.concatenate([np.repeat(frames[:1],padding,axis=0),frames])
+            states=np.concatenate([np.repeat(states[:1],padding,axis=0),states])
+            actions=np.concatenate([np.zeros((padding,actions.shape[1]),dtype=actions.dtype),actions])
+        is_first=np.zeros(k+h+1,dtype=bool)
+        is_first[:padding+1]=True
+        return {'rgb': np.transpose(frames,(0,3,1,2)).astype('float32')/255.,
+                'states': states.astype('float32'),
+                'actions': actions.astype('float32'),
                 'events': events[t:t+h], 'event_mask': mask[t:t+h],
+                'is_first':is_first,'context_length':length,'prediction_offset':k,
                 'episode_id': self.rows[episode]['episode_id'], 'offset': t}
 
     def normalization(self):

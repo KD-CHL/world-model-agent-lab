@@ -122,8 +122,11 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
         before=observed
         emit('execution_started',{'decision_id':decision.decision_id,'skill':decision.skill,
                                   'prefix_length':decision.prefix_length,'actions':decision.actions.tolist()})
+        trace=[]
         try:
-            observed=session.execute_actions(decision.actions,episode_id=decision.episode_id,step_id=decision.step_id)
+            options={'on_observation':trace.append} if agent.context_steps else {}
+            observed=session.execute_actions(decision.actions,episode_id=decision.episode_id,step_id=decision.step_id,
+                                             **options)
         except (ValueError,RuntimeError):
             session.abort('controller_rejected_or_failed')
             observed=session.observe()
@@ -131,7 +134,7 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
             emit('execution_failed',{'decision_id':decision.decision_id,'reason':'controller_rejected_or_failed',
                                      'state':asdict(agent.state)})
             break
-        feedback=agent.record_feedback(decision,observed)
+        feedback=agent.record_feedback(decision,observed,observations=trace if agent.context_steps else None)
         # Concrete RGB evidence makes prediction/observation alignment inspectable.
         if decision.predicted_frames is not None:
             artifact=f'prediction_{seed}_{cycle:04d}.npz'
@@ -143,6 +146,10 @@ def run_task(session,model,calibration,goal,*,baseline,horizon,max_cycles,error_
                 decision_id=np.array(decision.decision_id))
             if decision.error_bounds is not None:
                 arrays['error_bounds']=decision.error_bounds[:decision.prefix_length]
+            if trace:
+                arrays.update(observed_rgb_sequence=np.stack([v.rgb for v in trace]),
+                              observed_state_sequence=np.stack([v.state for v in trace]),
+                              observed_step_ids=np.array([v.step_id for v in trace]))
             np.savez_compressed(artifact_dir/artifact,**arrays)
             feedback['artifact']=artifact
         emit('feedback',feedback)
