@@ -18,9 +18,9 @@ def create_g1_session_node(owner, service_name='/wmal/g1/session'):
     class SessionNode(Node):
         def __init__(self):
             super().__init__('g1_simulation_session')
-            self.service = self.create_service(G1Session, service_name, self.handle)
+            self.service = self.create_service(G1Session, service_name, self._handle_request)
 
-        def handle(self, request, response):
+        def _handle_request(self, request, response):
             try:
                 if len(request.json) > 100_000:
                     raise ValueError('Oversize session request')

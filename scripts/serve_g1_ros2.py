@@ -26,7 +26,8 @@ def main(argv=None):
         if node:
             node.destroy_node()
         owner.close()
-        rclpy.shutdown()
+        # Jazzy's SIGINT handler may already have shut down this context.
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

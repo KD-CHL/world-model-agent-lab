@@ -13,9 +13,9 @@ def create_planner_node(planner):
     class PlannerNode(Node):
         def __init__(self):
             super().__init__('world_model_planner')
-            self.service = self.create_service(PlanMotion, '/wmal/plan', self.handle)
+            self.service = self.create_service(PlanMotion, '/wmal/plan', self._handle_request)
 
-        def handle(self, request, response):
+        def _handle_request(self, request, response):
             try:
                 data = decode(request.json, dict)
                 profile = RobotProfile(**data['profile'])

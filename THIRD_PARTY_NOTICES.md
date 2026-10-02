@@ -10,10 +10,14 @@ Planning-network source review updated 2026-09-30; pinned commits and transferre
 | Modular model-based control toolbox | https://github.com/facebookresearch/mbrl-lib | MIT; repository archived | Separation of model, rollout and trajectory search |
 | Visual predictive world models | https://github.com/facebookresearch/jepa-wms | CC BY-NC 4.0 | Feature prediction interface reference only; no code or weights bundled |
 | Goal-image predictive planning | https://github.com/gaoyuezhou/dino_wm | MIT | Goal-image feature planning interface reference |
-| Recurrent predictive policy learning | https://github.com/danijar/dreamerv3 | MIT | Observation/imagination and episode-reset design reference; no RSSM implementation or weights bundled |
+| Recurrent predictive policy learning | https://github.com/danijar/dreamerv3 | MIT | Categorical RSSM, observation/imagination, balanced KL and episode-reset design reference; independent compact PyTorch implementation, no upstream source or weights bundled |
 | Unitree world-model-action (UnifoLM-WMA) | https://github.com/unitreerobotics/unifolm-world-model-action | CC BY-NC-SA 4.0 | Training/data/inference workflow reference only; no source or weights copied |
 | Unitree vision-language-action (UnifoLM-VLA) | https://github.com/unitreerobotics/unifolm-vla | No root LICENSE file found during review | Training/dataset workflow reference only; verify code, model and dataset terms before use |
 | Unitree MuJoCo G1 29-DOF model | https://github.com/unitreerobotics/unitree_mujoco/tree/1eb6642e3f3fdfb7fb13a9794fd6a2dd93ea0e7d/unitree_robots/g1 | BSD 3-Clause; license copy in `robots/assets/unitree_g1/LICENSE` | Bundled source model and its 36 referenced STL meshes; project derivative removes the floating base joint and adds a floor, light, and `pack_camera`; see `robots/assets/unitree_g1/README.md` |
 | Unitree RL Mjlab G1 model and velocity policy | https://github.com/unitreerobotics/unitree_rl_mjlab/tree/1425b15f73bd4095f0df53709d7c389c3eb9e790 | Apache-2.0; license copy in `robots/assets/unitree_g1_mjlab/LICENSE` | Bundled G1 29-DOF MJCF/meshes and published velocity `policy.onnx`; model-derived collision geometry and deployment gains are used by the local MuJoCo walking adapter |
 
 This list describes upstream repository code licenses only. Checkpoint, dataset, submodule, and base-encoder licenses may have separate terms; verify those before downloading or redistributing them. Project modules were implemented against local interfaces and should not be represented as upstream reproductions.
+
+## Optional local ROS Python overlay (2026-10-02)
+
+`scripts/build_ros2_wmal.bash` downloads official source archives for `ros2/rclpy` 7.1.12, `ros2/rcl_interfaces` 2.0.4, `ros2/common_interfaces` 5.3.8 and `ros2/unique_identifier_msgs` 2.5.1. They are Apache-2.0 ROS packages; their license files/package declarations remain in the extracted source directories. Downloads, extracted source and compiled binaries reside in ignored `ros2/.python310/`; none is bundled in Git. This overlay changes the Python ABI for the project's local simulation nodes and is not a full alternative Jazzy distribution.

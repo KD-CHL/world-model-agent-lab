@@ -1,5 +1,11 @@
 """Live middleware test, run after building/sourcing wmal_interfaces on Ubuntu."""
 import importlib.util
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
 from threading import Thread
 import unittest
 from uuid import uuid4
@@ -11,6 +17,56 @@ ROS_AVAILABLE = (importlib.util.find_spec('rclpy') is not None
 
 @unittest.skipUnless(ROS_AVAILABLE, 'Requires ROS2 and generated wmal_interfaces')
 class RosIntegrationTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec('mujoco') is not None
+                         and importlib.util.find_spec('onnxruntime') is not None,
+                         'Requires G1 simulation and walking dependencies')
+    def test_real_simulation_service_shuts_down_cleanly_on_sigint(self):
+        from wmal.communication.g1_ros2 import G1Ros2Session
+        from wmal.communication.g1_session_protocol import scene_digest
+        from wmal.envs.indoor_scene import IndoorScene
+        service = '/wmal/test_' + uuid4().hex
+        process = subprocess.Popen([sys.executable, 'scripts/serve_g1_ros2.py',
+                                    '--service', service],
+                                   cwd=Path(__file__).resolve().parents[1],
+                                   env=dict(os.environ, MUJOCO_GL='egl'),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            with G1Ros2Session(scene_digest(IndoorScene()), service) as client:
+                self.assertGreater(client.observe().pelvis_height, .48)
+            process.send_signal(signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+
+    def test_planner_service_starts_and_rejects_invalid_payload(self):
+        import rclpy
+        from wmal.communication.ros2_nodes import create_planner_node
+        from wmal_interfaces.srv import PlanMotion
+        # No planner should be invoked for a payload missing profile/observation/goal.
+        rclpy.init()
+        node = None
+        try:
+            node = create_planner_node(object())
+            client = node.create_client(PlanMotion, '/wmal/plan')
+            self.assertTrue(client.wait_for_service(timeout_sec=3))
+            future = client.call_async(PlanMotion.Request(json='{}'))
+            rclpy.spin_until_future_complete(node, future, timeout_sec=3)
+            self.assertTrue(future.done())
+            self.assertFalse(future.result().ok)
+            self.assertEqual(json.loads(future.result().json),
+                             {'schema_version': 1, 'payload': {'error': 'PLANNING_FAILED'}})
+        finally:
+            if node is not None:
+                node.destroy_node()
+            rclpy.shutdown()
+
     def test_live_service_observe_step_reset(self):
         import rclpy
         from wmal.communication.g1_session_protocol import G1SessionOwner

@@ -63,7 +63,7 @@ JSON 用于初期可演化的研究字段；每条入口重新校验，不依赖
 
 ROS action/service 的端到端构建与通信验证须在已安装 ROS 2 的 Ubuntu 环境执行。测试用动态模型不能当论文世界模型结果，未配置 API 凭据不得声称真实大模型已调用。
 
-G1 固定底座关节控制/渲染和浮基策略回放均在本地 `wmal` Conda 环境的 MuJoCo 上验证；浮基回放 10 个触地步后约前进 0.60 m，姿态/高度保护通过。`rclpy`/`colcon` 端到端通信尚未验证；ROS 2 节点在 Ubuntu 24.04 + Jazzy 路径需另行构建检查。
+G1 固定底座关节控制/渲染和浮基策略回放均在本地 `wmal` Conda 环境的 MuJoCo 上验证；浮基回放 10 个触地步后约前进 0.60 m，姿态/高度保护通过。ROS 配置与后续通信验收见 [本机配置指南](26_ros2_local_setup.md)；其中 G1Session 验收不等同于本页通用三节点 Action/VLA 路径的端到端验收。
 
 官方接口参考（2026-09-22 查阅）：
 - https://docs.ros.org/en/jazzy/p/rclpy/api/actions.html
@@ -73,39 +73,35 @@ G1 固定底座关节控制/渲染和浮基策略回放均在本地 `wmal` Conda
 
 ## Ubuntu 24.04 / ROS 2 Jazzy 安装与启动
 
-在目标系统按 ROS 官方文档安装 ros-base、colcon 和接口生成工具。项目 Python 入口统一使用 `wmal`，不再建立额外 venv。**先验证 ROS Python ABI 是否兼容**：Ubuntu 24.04 的系统 ROS Jazzy 绑定通常针对系统 Python 3.12，而当前 `wmal` 为 Python 3.10；只 source ROS 或追加 PYTHONPATH 不能修复二进制 ABI 差异。必须先提供与 `wmal` Python 匹配的 ROS 绑定/接口构建；本机这部分尚未验收，不能把下面命令当作已验证的 ROS 安装方案。本地非 ROS MuJoCo 闭环不依赖该步骤。
+本机 Jazzy 已安装；项目 Python 入口统一使用 `wmal`，不建立额外 venv。系统 Python 3.12 二进制绑定不能直接导入项目 Python 3.10，因此先按 [本机配置指南](26_ros2_local_setup.md) 构建局部 overlay。本地非 ROS MuJoCo 闭环不依赖该步骤。
 
 ```bash
-source /opt/ros/jazzy/setup.bash
 conda activate wmal
-# 仅在 ROS Python 绑定与当前解释器 ABI 匹配后继续。
+bash scripts/build_ros2_wmal.bash
+source scripts/setup_ros2.bash
 python -c "import sys,rclpy; print(sys.executable); print(rclpy.__file__)"
-cd ros2
-colcon build --base-paths wmal_interfaces
-source install/setup.bash
-cd ..
 ```
 
 在三个终端分别启动：
 
 ```bash
 # 终端 A：单关节探针，只验证 ROS 与 MuJoCo 接口
-source /opt/ros/jazzy/setup.bash
 conda activate wmal
-PYTHONPATH=src python scripts/serve_ros2.py robot --config configs/robots/interface_probe.json
+source scripts/setup_ros2.bash
+python scripts/serve_ros2.py robot --config configs/robots/interface_probe.json
 
 # 终端 B：加载本项目训练的探针模型；实际任务可用 --plugin 接入其他规划器
-source /opt/ros/jazzy/setup.bash
 conda activate wmal
-PYTHONPATH=src python scripts/serve_ros2.py planner --checkpoint runs/probe/model.json
+source scripts/setup_ros2.bash
+python scripts/serve_ros2.py planner --checkpoint runs/probe/model.json
 
 # 终端 C：大模型 API Agent
-source /opt/ros/jazzy/setup.bash
 conda activate wmal
+source scripts/setup_ros2.bash
 export LLM_BASE_URL='https://provider.example/v1'
 export LLM_MODEL='your-model'
 read -s LLM_API_KEY && export LLM_API_KEY
-PYTHONPATH=src python scripts/run_agent.py --config configs/robots/interface_probe.json --instruction 'set hinge to 0.3 radians'
+python scripts/run_agent.py --config configs/robots/interface_probe.json --instruction 'set hinge to 0.3 radians'
 ```
 
 `provider.example` 只是格式示例；API key 只从环境读取，不写入配置文件。先按[规划主线](11_planning_world_model_pipeline.md)采样并训练 `runs/probe/model.json`。若使用 `--plugin`，factory 直接返回具有 `plan(profile, observation, goal)` 的规划器。未启动终端 B 时 Agent 会报 planner unavailable。

@@ -77,19 +77,21 @@ PYTHONPATH=src python scripts/g1_llm_agent.py --headless \
 
 `--max-replans 0` 关闭任务级 API 恢复；默认 CLI 为 2 次。库调用 G1Coordinator 默认仍为 0，便于原实验保持既有设置。每次 API 内部 HTTP 重试由现有客户端独立限制；任务重规划次数不等于 HTTP 尝试次数。一次任务最多允许 `1 + max_replans` 次语义规划调用。执行反馈仅调节下一轮速度范围，校准残差连续两次超限才请求任务重规划。
 
-ROS2 路径先激活已配置的 Ubuntu ROS2 环境，在项目根目录编译接口；两个终端均须 source 相同 overlay，并能导入项目与仿真依赖。
+ROS2 路径使用项目 Python 3.10 局部 overlay；构建、版本边界见 [本机 ROS 2 配置](../26_ros2_local_setup.md)。两个终端均加载相同项目配置。
 
 ```bash
-colcon build --base-paths ros2 --packages-select wmal_interfaces
-source install/setup.bash
-PYTHONPATH=src python scripts/serve_g1_ros2.py
+conda activate wmal
+# 新克隆或尚未构建时执行一次：bash scripts/build_ros2_wmal.bash
+source scripts/setup_ros2.bash
+python scripts/serve_g1_ros2.py
 ```
 
 另一个终端：
 
 ```bash
-source install/setup.bash
-PYTHONPATH=src python scripts/g1_llm_agent.py --transport ros2 \
+conda activate wmal
+source scripts/setup_ros2.bash
+python scripts/g1_llm_agent.py --transport ros2 \
   --instruction '前往世界坐标 (1,0)' --max-replans 2 --max-total-cycles 300
 ```
 

@@ -139,8 +139,8 @@ python -m pip check
 
 ```bash
 conda activate wmal
-export PYTHONPATH="$PWD/src"
-PYTHONPATH=src python -m unittest discover -s tests -v
+export PYTHONPATH="$PWD/src:${PYTHONPATH:-}"
+python -m unittest discover -s tests -v
 ```
 
 运行 MuJoCo 探针、采样和训练：
@@ -157,7 +157,15 @@ PYTHONPATH=src python scripts/train.py
 
 交互窗口中，按 `N` / `P` 选择下一个/上一个关节，按 `[` / `]` 将当前关节目标减少/增加 `0.1 rad`，按 `0` 将目标设为当前关节位置。目标会按配置的关节速度上限平滑执行；默认相机可用鼠标旋转，若需锁定相机可加 `--camera pack_camera`。
 
-ROS 2 中间件仍需在 Ubuntu 24.04 上单独安装 Jazzy。其系统 Python 3.12 绑定不能直接用于本项目 Python 3.10 环境；需先完成匹配绑定的构建与通信验证，不能仅靠 `source /opt/ros/jazzy/setup.bash` 混入系统包。直接 MuJoCo 训练和仿真不需要 ROS。
+本机已经安装 ROS 2 Jazzy。系统 Python 3.12 绑定不能直接用于项目 Python 3.10；项目使用局部重编译 overlay，仍只使用 `wmal` 环境。每个项目 ROS 终端执行下列命令，配置与重建说明见 [本机 ROS 2 指南](docs/26_ros2_local_setup.md)。直接 MuJoCo 训练和仿真不需要 ROS。
+
+```bash
+conda activate wmal
+source scripts/setup_ros2.bash
+python scripts/serve_g1_ros2.py --viewer
+```
+
+另一个终端执行 `conda activate wmal`、`source scripts/setup_ros2.bash`，设置已有 API 配置后运行 `python scripts/g1_llm_agent.py --transport ros2 --headless`，即可连续输入任务。新克隆或缺少 overlay 时先执行 `bash scripts/build_ros2_wmal.bash`。不要在项目 overlay 终端直接调用使用系统 Python 3.12 的 `/usr/bin/ros2`。
 
 Agent 请求 HTTP API，将受限目标交给 ROS 2 世界模型规划服务，再以 ROS 2 action 执行第一步并读取新观测。安装及三终端启动命令见 [启动指南](docs/09_agent_ros2_design.md)。
 
@@ -167,7 +175,7 @@ G1 数据准备、WMA decision/joint 微调、策略服务调用和离线视频�
 
 需要保持 MuJoCo 窗口运行、由世界模型预测和 Agent 连续重规划时，使用 [G1 世界模型闭环指南](docs/17_g1_world_model_agent_loop.md) 与 `PYTHONPATH=src python scripts/g1_agent_sim.py --config configs/experiments/g1_closed_loop.example.json`。该实验入口要求显式配置兼容的 G1 浮动底座状态预测器；Unitree ONNX 仅作为低层行走控制器。完成单个目标不会关闭会话，可继续输入后续目标；本入口不负责训练世界模型。
 
-运行 MuJoCo 探针、G1 资产加载/相机渲染和本地协议测试：`MUJOCO_GL=egl PYTHONPATH=src python -m unittest discover -s tests -v`。ROS 2 端到端构建与通信需在 Ubuntu 安装 ROS 后验证。纯语法/JSON检查使用 `python3 scripts/check_scaffold.py`。
+运行 MuJoCo 探针、G1 资产加载/相机渲染和本地协议测试：`MUJOCO_GL=egl python -m unittest discover -s tests -v`。ROS 2 通信测试先加载上述项目 overlay，加载后不要用 `PYTHONPATH=src` 覆盖 ROS 导入路径。纯语法/JSON检查使用 `python3 scripts/check_scaffold.py`。
 
 ## 目录职责
 
