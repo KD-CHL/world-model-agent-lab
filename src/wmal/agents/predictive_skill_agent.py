@@ -230,52 +230,11 @@ class PredictiveSkillAgent:
             self.state.status='budget_exhausted'
             return self._reobserve(observation,'budget_exhausted',started)
         target=np.asarray(self._target().target)
-        ranked,evidence=[],[]
-        for index,candidate in enumerate(candidates):
-            actions=np.asarray(candidate.actions)[:remaining]
-            mean,frames,bounds,diagnostics=None,None,None,None
-            prefix=len(actions)
-            score=float(index)  # A0: fixed plan ordering, no model query.
-            if self.baseline=='A1':
-                if candidate.nominal_terminal is None:
-                    raise ValueError('A1 requires an explicit controller-provided nominal terminal state')
-                terminal=np.asarray(candidate.nominal_terminal)
-                if terminal.shape!=target.shape or not np.isfinite(terminal).all():
-                    raise ValueError('Invalid nominal outcome')
-                score=float(np.linalg.norm((terminal-target)/self.scale))
-            elif self.baseline in ('A2','A3'):
-                if self._history is not None:
-                    result=self.predictor.predict_context(*self._history.inputs(),actions)
-                else:
-                    result=self.predictor.predict(observation.rgb,observation.state,actions)
-                values=np.asarray(result['states'])
-                video=np.asarray(result['frames'])
-                if (result['model_version']!=self.predictor.version or values.ndim!=3
-                        or values.shape[1:]!=(len(actions),len(target)) or len(values)<2
-                        or video.ndim!=5 or video.shape[:2]!=values.shape[:2]
-                        or video.shape[2:]!=np.asarray(observation.rgb).shape
-                        or not np.isfinite(values).all() or not np.isfinite(video).all()):
-                    raise ValueError('Malformed/stale world-model response')
-                mean,frames=values.mean(0),video.mean(0)
-                diagnostics=result.get('diagnostics')
-                if self.baseline=='A3':
-                    self.calibration.validate_for(self.predictor.version,self.predictor.semantics)
-                    bounds=self.calibration.bounds(values.std(0),version=self.predictor.version)
-                    trusted=(bounds/self.scale).max(-1)<=self.error_budget
-                    if self.state_lower is not None:
-                        trusted &= np.all((mean-bounds>=self.state_lower)&(mean+bounds<=self.state_upper),axis=-1)
-                    prefix=int(np.cumprod(trusted).sum())
-                elif self.state_lower is not None:
-                    if np.any(values<self.state_lower) or np.any(values>self.state_upper):
-                        prefix=0
-                if prefix:
-                    score=float(np.linalg.norm((mean[prefix-1]-target)/self.scale))
-                    if bounds is not None:
-                        score+=float(np.linalg.norm(bounds[prefix-1]/self.scale))
-            evidence.append({'candidate':index,'skill':candidate.skill,'trusted_prefix':prefix,
-                             'score':score if prefix else None})
-            if prefix:
-                ranked.append((score,index,candidate,actions,prefix,mean,frames,bounds,diagnostics))
+        from wmal.agents.selection_policy import select_candidates
+        ranked,evidence=select_candidates(self.predictor,observation,candidates,target,
+                baseline=self.baseline,calibration=self.calibration,error_budget=self.error_budget,
+                scale=self.scale,remaining=remaining,state_lower=self.state_lower,
+                state_upper=self.state_upper,history=self._history)
         self.state.replans+=1
         if not ranked:
             return self._reobserve(observation,'no_trusted_prefix',started)
