@@ -1,0 +1,21 @@
+{
+  "scene": "stack_block",
+  "task": {
+    "schema": "wmal.task_graph.v1",
+    "task_id": "g1_joint_sequence",
+    "start": [0.35, 0.87],
+    "nodes": [
+      {"node_id": "reach_A", "skill": "joint_reach", "target": [0.43, 0.95]},
+      {"node_id": "hold_A", "skill": "joint_hold", "target": [0.43, 0.95], "dependencies": ["reach_A"], "hold_steps": 3},
+      {"node_id": "reach_B", "skill": "joint_reach", "target": [0.27, 0.79], "dependencies": ["hold_A"]},
+      {"node_id": "hold_B", "skill": "joint_hold", "target": [0.27, 0.79], "dependencies": ["reach_B"], "hold_steps": 3},
+      {"node_id": "return_start", "skill": "joint_reach", "target": [0.35, 0.87], "dependencies": ["hold_B"], "hold_steps": 3}
+    ]
+  },
+  "runtime": {
+    "baseline": "A3", "recovery": false, "horizon": 4, "error_budget": 1.0,
+    "seed": 0, "max_actions": 80, "max_decisions": 120, "max_recoveries": 4,
+    "node_recoveries": 2, "max_rejections": 3, "planning_timeout_s": 5.0,
+    "execution_timeout_s": 2.0
+  }
+}

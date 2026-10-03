@@ -145,6 +145,20 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertEqual(report['state']['status'],'canceled')
         self.assertEqual(session.step_id,0)
 
+    def test_reset_servo_transient_is_not_misclassified_as_wrong_command_pose(self):
+        session=Session()
+        session.q=np.array([.3236,.9176])  # actual MuJoCo reset transient, inside physical envelope
+        report=self.run_task(session)
+        self.assertGreater(report['state']['executed_cycles'],0)
+        self.assertEqual(report['state']['status'],'succeeded')
+
+    def test_wrong_initial_command_pose_is_rejected_without_actions(self):
+        session=Session()
+        session.target=np.array([.4,.9])
+        report=self.run_task(session)
+        self.assertEqual(report['state']['status'],'needs_review')
+        self.assertEqual(session.step_id,0)
+
     def test_no_trusted_prefix_is_bounded_and_does_not_fake_new_evidence(self):
         from wmal.agents.task_runtime import TaskRuntime, RuntimeConfig
         session=Session()
@@ -239,3 +253,27 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertEqual(result['executed'],1)
         self.assertEqual(session.step_id,1)
         self.assertIsNotNone(session.fault_reason)
+
+    def test_controller_exception_after_side_effect_still_records_actual_step(self):
+        from wmal.agents.task_runtime import TaskRuntime, RuntimeConfig
+        class AfterAction(Session):
+            def execute_actions(self,*args,**kwargs):
+                super().execute_actions(*args,**kwargs)
+                raise RuntimeError('ack lost after action')
+        session=AfterAction()
+        result=TaskRuntime(graph(),session,Predictor(),config=RuntimeConfig(baseline='A1')).run()
+        self.assertEqual(result['state']['status'],'fault_latched')
+        self.assertEqual(result['state']['executed_cycles'],1)
+        self.assertEqual(session.step_id,1)
+
+    def test_replanning_alone_is_not_counted_as_verified_recovery(self):
+        from wmal.agents.task_runtime import TaskRuntime,RuntimeConfig
+        class Biased(Predictor):
+            def predict(self,*args):
+                result=super().predict(*args)
+                result['states'][:,:,0]+=.03
+                return result
+        result=TaskRuntime(graph(),Session(),Biased(),Calibration(),
+                           config=RuntimeConfig(recovery=True)).run()
+        self.assertGreater(result['state']['recoveries'],0)
+        self.assertEqual(result['state']['recoveries_succeeded'],0)

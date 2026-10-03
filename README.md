@@ -4,6 +4,12 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
 
+新增 **任务图与有限恢复 Agent**：把到达、保持、多阶段依赖、部分执行和真实成功
+验证分开管理，A0–A3 与恢复开关独立，保留固定世界模型与控制器。使用
+`python scripts/g1_task_agent.py`，完整命令、持续窗口和实验边界见
+[任务图 Agent 指南](docs/28_task_graph_agent.md)。当前开发任务不能等同于已学会复杂操作；
+实际完成/失败均保留在实验结果中。
+
 新增可训练的 **RGB 动作条件视觉世界模型与可信度辅助技能 Agent**：支持真实 MuJoCo 图像采集、LeRobot AV1/parquet 对齐导入、CNN/GRU 多步集成训练、冻结编码器微调、独立 episode 校准、A0–A3 和保持打开的交互窗口。见 [架构与论文假设](docs/architecture/visual-world-agent.md)、[完整命令与输出位置](docs/23_visual_world_training_and_agent.md)、[实际验收与局限](docs/architecture/visual-world-verification.md)。当前闭环验证是 G1 两关节到达目标，不宣称操作任务/UniFoLM 大模型微调已完成。
 
 新增可切换的 **categorical RSSM 世界模型**：观测后验/动作先验、离散随机状态、balanced KL/free nats、后验重构与先验多步训练；保留确定性网络作对照。Agent 支持真实反馈驱动的有序子目标、有限重观测预算及预测证据账本。只使用 `wmal`，不引入上游项目环境，不训练 actor–critic/controller。见 [RSSM 架构、训练/微调与持续仿真命令](docs/25_rssm_agent.md) 和 [实际验收](docs/architecture/rssm-agent-verification.md)。

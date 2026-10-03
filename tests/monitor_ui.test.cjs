@@ -39,3 +39,7 @@ const getElement = id => retained.get(id);
 ui.clearEvidenceViews(getElement);
 for (const el of retained.values()) assert.notEqual(el.textContent, 'previous run evidence');
 console.log('UI behavior: missing values, alignment, reconnect de-duplication, source reset and text-only rendering passed');
+assert.equal(typeof ui.taskGraphRows, 'function');
+assert.deepEqual(ui.taskGraphRows({nodes:{hold_A:{status:'running',actions:3,hold_count:2,recoveries:1}}}),
+                [['hold_A','running',3,2,1]]);
+assert.deepEqual(ui.taskGraphRows({}), []);

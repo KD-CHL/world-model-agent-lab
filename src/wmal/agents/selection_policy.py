@@ -20,9 +20,9 @@ def select_candidates(predictor, observation, candidates, target, *, baseline,
             score = float(np.linalg.norm((terminal-target)/scale))
         elif baseline in ('A2','A3'):
             if history is not None:
-                result = predictor.predict_context(*history.inputs(), actions)
+                result = predictor.predict_context(*history.inputs(), actions.copy())
             else:
-                result = predictor.predict(observation.rgb, observation.state, actions)
+                result = predictor.predict(observation.rgb.copy(), observation.state.copy(), actions.copy())
             values, video = np.asarray(result['states']), np.asarray(result['frames'])
             if (result['model_version'] != predictor.version or values.ndim != 3
                     or values.shape[1:] != (len(actions),len(target)) or len(values) < 2

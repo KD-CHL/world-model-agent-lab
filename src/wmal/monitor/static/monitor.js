@@ -32,6 +32,9 @@ function candidateViews(plan) {
     skill:c.skill??null,score:c.score??c.cost??null,prefix:c.trusted_prefix??null,
     chosen:(c.candidate??c.candidate_id)===evidence.selected_candidate,rejection:c.rejection??null}));
 }
+function taskGraphRows(state) {
+  return Object.entries(state.nodes||{}).map(([id,n])=>[id,n.status??null,n.actions??null,n.hold_count??null,n.recoveries??null]);
+}
 function clearEvidenceViews(getElement) {
   const messages={eventDetail:'未选择事件',eventDetailTitle:'事件详情',artifactDetail:'未选择工件',
     artifactTitle:'配置、来源与结果',predictionAlignment:'选择工件查看图像证据',
@@ -51,7 +54,7 @@ function alignment(frame, event) {
   if (!Number.isFinite(frame.sim_time_s) || !Number.isFinite(event.sim_time_s)) return 'same_step';
   return Math.abs(frame.sim_time_s-event.sim_time_s) < 1e-8 ? 'exact' : 'different_time';
 }
-if (typeof module !== 'undefined') module.exports = {format, setText, mergeEvents, alignment, candidateViews, clearEvidenceViews, RequestSequence, currentTaskState};
+if (typeof module !== 'undefined') module.exports = {format, setText, mergeEvents, alignment, candidateViews, taskGraphRows, clearEvidenceViews, RequestSequence, currentTaskState};
 if (typeof document !== 'undefined') {
   const $ = id => document.getElementById(id);
   const names = {task_started:'任务开始',task_result:'任务结果',plan:'计划与模型评估',feedback:'真实反馈',
@@ -59,9 +62,12 @@ if (typeof document !== 'undefined') {
     command_sent:'命令发送',command_ack:'执行确认',command_uncertain:'执行结果不确定',replan_requested:'请求重规划',
     observation:'环境观测',agent_state:'Agent 状态',language_planning:'语言规划',mission_validated:'任务校验',
     mission_goal:'子目标',mission_result:'任务结果',goal_result:'目标结果',executed_transition:'真实状态转移',
-    safety_stop:'安全停止',failure:'异常',session_exit:'会话退出',skill_result:'技能结果'};
+    safety_stop:'安全停止',failure:'异常',session_exit:'会话退出',skill_result:'技能结果',
+    node_state:'任务节点',predicate_result:'真实条件验证',recovery_started:'开始恢复',
+    recovery_result:'恢复结果',execution_stopped:'动作段提前停止'};
   const statusNames = {running:'运行中',succeeded:'成功',failed:'失败',incomplete:'未完成 / 缺少终态',
-    budget_exhausted:'预算耗尽',needs_review:'需要检查',execution_failed:'执行失败',safety_stop:'安全停止'};
+    budget_exhausted:'预算耗尽',needs_review:'需要检查',execution_failed:'执行失败',safety_stop:'安全停止',
+    fault_latched:'故障锁止',recovering:'有限恢复中',canceled:'已取消'};
   let runs=[], selected=null, records=[], stream=null, cursor=0, generation=0, summary={}, artifacts=[], prediction=null;
   let currentFrame=null, frameURL=null, frameBusy=false, selectedEvent=null, selectedArtifact='', artifactVersion=0;
   const detailRequests=new RequestSequence();
@@ -138,7 +144,11 @@ if (typeof document !== 'undefined') {
     const lastPlan=latest.plan||{},plan=lastPlan.task_id&&lastPlan.task_id!==task.task_id?{}:lastPlan;
     const ev=plan.evidence||plan.planning_evidence||{},predictionReport=plan.prediction||{};
     const status=task.status||state.status;badge('taskStatus',statusNames[status]||status||'未记录',status==='succeeded'?'good':status==='running'?'':'warn');
-    pairs($('agentState'),[['任务目标',state.task_goal||start.goal||latest.goal?.targets||latest.goal||latest.mission_validated?.goals],['当前子目标',ev.target_stage||latest.mission_goal?.goal],['已完成子目标',state.completed_subgoals],['可用技能',state.callable_skills||start.callable_skills],['当前候选技能',state.current_candidates],['执行 / 预算',`${format(state.executed_cycles??task.cycles)} / ${format(start.max_cycles??task.max_cycles)}`],['最近失败原因',state.failure_reason||latest.planning_event?.reason||latest.failure?.error_type]]);
+    const currentStart=start.task_id===task.task_id?start:{};
+    pairs($('agentState'),[['任务目标',state.task_goal||currentStart.goal||task.goal],['当前子目标',state.active_node||ev.target_stage||latest.mission_goal?.goal],['已完成子目标',state.completed_subgoals],['可用技能',state.callable_skills||task.callable_skills],['当前候选技能',state.current_candidates],['执行 / 预算',`${format(state.executed_cycles??task.cycles)} / ${format(task.max_cycles)}`],['剩余预算',state.budget_remaining],['恢复尝试 / 已验证成功',`${format(state.recoveries)} / ${format(state.recoveries_succeeded)}`],['节点：状态 / 动作数 / 保持计数 / 恢复数',taskGraphRows(state)],['最近失败原因',state.failure_reason]]);
+    $('taskNodeRows').replaceChildren();
+    taskGraphRows(state).forEach(row=>cells($('taskNodeRows'),row));
+    if(!taskGraphRows(state).length)cells($('taskNodeRows'),['当前日志未记录任务图','—','—','—','—']);
     pairs($('modelState'),[['基线',ev.baseline||start.baseline||latest.task_result?.baseline],['模型版本',plan.model_version||latest.task_result?.model_version],['预测跨度',plan.prefix_length??predictionReport.horizon_steps??plan.prediction_horizon_s],['不确定性语义',predictionReport.uncertainty_kind||((ev.baseline==='A3')?'校准误差界':undefined)],['当前动作',plan.actions||plan.action],['所选候选',ev.selected_candidate]]);
     setText($('recentFeedback'),pretty(state.recent_feedback||latest.feedback||latest.prediction_residual));
     setText($('robotState'),pretty(latest.observation?.state||latest.executed_transition?.after||latest.goal_result?.final_state||latest.feedback?.observed_state||state.recent_feedback?.observed_state));

@@ -96,8 +96,22 @@ class ExecutionManager:
                     break
         except (Exception,KeyboardInterrupt) as exc:
             status,reason = 'fault',f'{type(exc).__name__}: {exc}'
-            unresolved = unresolved or len(trace)<len(expected.actions)
+            # An acknowledgement may fail AFTER physics advanced. Observe once,
+            # never resend. Only one additional contiguous endpoint is admissible.
+            try:
+                final=self.session.observe()
+                if (final.episode_id==expected.episode_id
+                        and final.step_id==expected.step_id+len(trace)+1
+                        and len(trace)<len(expected.actions)
+                        and final.state.shape==(4,) and final.rgb.shape==current.rgb.shape):
+                    final=VisualObservation(final.episode_id,final.step_id,final.rgb,final.state)
+                    trace.append(final)
+                    current=final
+                elif final.episode_id!=expected.episode_id or final.step_id!=expected.step_id+len(trace):
+                    unresolved=True
+            except Exception:
+                unresolved=True
             self.session.abort('task_execution_fault')
         return {'decision_id':expected.decision_id,'status':status,'reason':reason,
                 'executed':len(trace),'authorized':len(expected.actions),'trace':tuple(trace),
-                'unresolved':unresolved,'final':current}
+                'unresolved':unresolved,'actual_total':None if unresolved else len(trace),'final':current}

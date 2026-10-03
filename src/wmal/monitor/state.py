@@ -53,6 +53,13 @@ def summarize(events, source_stopped=False):
         if kind == 'task_started':
             task.update(status='running', goal=payload.get('goal'), max_cycles=payload.get('max_cycles'),
                         baseline=payload.get('baseline'), callable_skills=payload.get('callable_skills'))
+            if isinstance(payload.get('graph'),dict):
+                task['graph']=payload['graph']
+        if kind in ('agent_state','task_result') and isinstance(payload.get('state'),dict):
+            state=payload['state']
+            for key in ('active_node','nodes','budget_remaining','recoveries','recoveries_succeeded'):
+                if key in state:
+                    task[key]=state[key]
         if kind in ('task_result', 'goal_result', 'mission_result'):
             state = payload.get('state', {})
             state = state if isinstance(state, dict) else {}

@@ -37,7 +37,10 @@
         <dl id="frameMeta" class="frame-meta"></dl><p id="frameAlignment" class="muted small">等待帧与事件的对齐信息</p>
       </article>
       <article class="panel"><div class="panel-head"><h2>Agent 任务状态</h2><span id="taskStatus" class="badge">未记录</span></div>
-        <dl id="agentState" class="kv"></dl><div class="divider"></div><h3>预测与执行接口</h3><dl id="modelState" class="kv"></dl>
+        <dl id="agentState" class="kv"></dl>
+        <div class="divider"></div><h3>任务节点</h3>
+        <div class="table-wrap"><table><thead><tr><th>节点</th><th>状态</th><th>实际动作</th><th>保持采样</th><th>恢复次数</th></tr></thead><tbody id="taskNodeRows"></tbody></table></div>
+        <div class="divider"></div><h3>预测与执行接口</h3><dl id="modelState" class="kv"></dl>
         <details><summary>最近反馈与失败原因</summary><pre id="recentFeedback">未记录</pre></details>
         <details><summary>机器人实测状态 / 关节 / 接触记录</summary><pre id="robotState">未记录</pre></details>
       </article>

@@ -175,10 +175,11 @@ class TaskRuntime:
               'graph':self.graph.to_dict(),'graph_hash':self.graph.digest,'baseline':self.config.baseline,
               'recovery':self.config.recovery,'max_cycles':self.config.max_actions,
               'callable_skills':list(JointSkills.names),'model_version':self.model_version})
-        initial=JointVerifier(self.graph.start)
+        start_state=self._observed.state
         if getattr(self.session,'fault_reason',None):
             self._terminate('fault_latched','session_fault')
-        elif not initial.update(self._observed):
+        elif (start_state.shape!=(4,) or np.linalg.norm(start_state[2:]-self.graph.start)>.015
+              or np.any(start_state[:2]<TARGET_LOW-.15) or np.any(start_state[:2]>TARGET_HIGH+.15)):
             self._terminate('needs_review','initial_pose_mismatch')
         while self.state.status=='running':
             if cancel is not None and cancel():
@@ -391,7 +392,6 @@ class TaskRuntime:
                 if not self._recover(node,reason):
                     return
                 if not repairing:
-                    state.recoveries_succeeded+=1
                     state.status='running'
                     entry['status']='running'
                     self._emit('recovery_result',{'status':'replanned','reason':reason})

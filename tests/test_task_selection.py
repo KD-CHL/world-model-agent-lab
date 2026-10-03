@@ -50,3 +50,19 @@ class SelectionTests(unittest.TestCase):
                 return result
         with self.assertRaises(ValueError):
             self.choose('A2',Stale())
+
+    def test_predictor_cannot_mutate_candidate_or_observation_inputs(self):
+        from wmal.agents.selection_policy import select_candidates
+        class Writes(Predictor):
+            def predict(self,rgb,state,actions):
+                rgb[:]=.5
+                state[:]=.01
+                actions[:]=.02
+                return super().predict(rgb,state,actions)
+        obs=VisualObservation('e',0,np.zeros((3,32,32)),np.array([0.]))
+        candidate=SkillCandidate('move',np.full((2,1),.1))
+        select_candidates(Writes(),obs,[candidate],np.array([.2]),baseline='A2',calibration=None,
+                          error_budget=1.,scale=np.ones(1),remaining=2,state_lower=None,state_upper=None)
+        np.testing.assert_array_equal(obs.state,[0.])
+        np.testing.assert_array_equal(obs.rgb,np.zeros((3,32,32)))
+        np.testing.assert_array_equal(candidate.actions,[[.1],[.1]])
