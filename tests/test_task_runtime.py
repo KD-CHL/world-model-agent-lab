@@ -200,6 +200,33 @@ class TaskRuntimeTests(unittest.TestCase):
         report=TaskRuntime(graph(),Session(),Forbidden(),config=RuntimeConfig(baseline='A0',horizon=1)).run()
         self.assertEqual(report['state']['status'],'succeeded')
 
+    def test_a0_compiles_dependency_order_not_input_array_order(self):
+        from wmal.agents.task_runtime import TaskRuntime, RuntimeConfig
+        original=graph()
+        shuffled=replace(original,nodes=tuple(reversed(original.nodes)))
+        result=TaskRuntime(shuffled,Session(),Predictor(),
+                           config=RuntimeConfig(baseline='A0',horizon=1)).run()
+        self.assertEqual(result['state']['status'],'succeeded')
+        self.assertEqual(result['state']['completed_subgoals'],
+                         [node.node_id for node in original.nodes])
+
+    def test_new_task_never_overwrites_prior_prediction_artifacts(self):
+        import tempfile
+        from pathlib import Path
+        from wmal.agents.task_runtime import TaskRuntime, RuntimeConfig
+        with tempfile.TemporaryDirectory() as temporary:
+            first=TaskRuntime(replace(graph(),task_id='task/001'),Session(),Predictor(),
+                              config=RuntimeConfig(baseline='A2',horizon=1),artifact_dir=temporary)
+            first.run()
+            before={path.name:path.read_bytes() for path in Path(temporary).glob('*.npz')}
+            self.assertTrue(before)
+            TaskRuntime(replace(graph(),task_id='task/002'),Session(),Predictor(),
+                        config=RuntimeConfig(baseline='A2',horizon=1),artifact_dir=temporary).run()
+            after={path.name:path.read_bytes() for path in Path(temporary).glob('*.npz')}
+            self.assertGreater(len(after),len(before))
+            for name,value in before.items():
+                self.assertEqual(after[name],value)
+
     def test_a3_prediction_mismatch_stops_before_second_authorized_action(self):
         from wmal.agents.task_runtime import TaskRuntime, RuntimeConfig
         class Biased(Predictor):

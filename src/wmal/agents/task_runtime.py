@@ -87,7 +87,15 @@ class TaskRuntime:
         self._frozen={}
         previous=np.asarray(graph.start)
         # A0's complete nominal program is frozen before any execution.
-        for node in graph.nodes:
+        ordered=[]
+        pending=list(graph.nodes)
+        completed=set()
+        while pending:
+            node=next(n for n in pending if all(d in completed for d in n.dependencies))
+            ordered.append(node)
+            completed.add(node.node_id)
+            pending.remove(node)
+        for node in ordered:
             if node.skill=='joint_hold':
                 actions=np.zeros((node.hold_steps,2))
             else:
@@ -148,7 +156,8 @@ class TaskRuntime:
     def _save_artifact(self,decision_id,before,actions,mean,frames,bounds,trace):
         if self.artifact_dir is None or frames is None or not trace:
             return None
-        name=f'prediction_{self.config.seed}_{self.state.decision_count:04d}.npz'
+        # Decision UUIDs isolate repeated tasks without using user-supplied IDs as paths.
+        name=f'prediction_{decision_id}.npz'
         count=len(trace)
         values={'before_rgb':before.rgb,'actions':actions[:count],'predicted_rgb':frames[:count],
                 'observed_rgb':trace[-1].rgb,'predicted_state':mean[:count],
