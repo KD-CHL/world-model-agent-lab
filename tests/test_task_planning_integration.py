@@ -15,4 +15,3 @@ class TaskPlanningIntegrationTests(unittest.TestCase):
         self.assertEqual(report['state']['executed_cycles'], 1)
         self.assertLess(abs(session.target[0] - .367), 1e-8)
         self.assertLess(abs(session.target[1] - .905), 1e-8)
-
