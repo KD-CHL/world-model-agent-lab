@@ -133,7 +133,9 @@ if (typeof document !== 'undefined') {
     if($('follow').checked&&data.events.length){selectedEvent=data.events[data.events.length-1];renderSelectedEvent();}
   }
   function renderSummary(){
-    const s=summary,latest=s.latest||{},tasks=s.tasks||[],task=tasks[tasks.length-1]||{};
+    const s=summary,tasks=s.tasks||[],task=tasks[tasks.length-1]||{};
+    const latest=s.current_task_latest||Object.fromEntries(
+      Object.entries(s.latest||{}).filter(([,payload])=>task.task_id&&payload?.task_id===task.task_id));
     const ended=tasks.filter(t=>!['running','incomplete'].includes(t.status)),success=ended.filter(t=>t.status==='succeeded');
     setText($('taskMetric'),tasks.length?`${success.length} / ${ended.length}`:'—');setText($('taskHint'),`${tasks.filter(t=>['running','incomplete'].includes(t.status)).length} 个运行中或无终态记录`);
     const latency=s.planning_latency_ms||{};setText($('latencyMetric'),latency.n?`${format(latency.p50,1)} / ${format(latency.p95,1)}`:'—');setText($('latencyHint'),`毫秒 · ${latency.n||0} 次记录`);
@@ -145,7 +147,7 @@ if (typeof document !== 'undefined') {
     const ev=plan.evidence||plan.planning_evidence||{},predictionReport=plan.prediction||{};
     const status=task.status||state.status;badge('taskStatus',statusNames[status]||status||'未记录',status==='succeeded'?'good':status==='running'?'':'warn');
     const currentStart=start.task_id===task.task_id?start:{};
-    pairs($('agentState'),[['任务目标',state.task_goal||currentStart.goal||task.goal],['当前子目标',state.active_node||ev.target_stage||latest.mission_goal?.goal],['已完成子目标',state.completed_subgoals],['可用技能',state.callable_skills||task.callable_skills],['当前候选技能',state.current_candidates],['执行 / 预算',`${format(state.executed_cycles??task.cycles)} / ${format(task.max_cycles)}`],['剩余预算',state.budget_remaining],['恢复尝试 / 已验证成功',`${format(state.recoveries)} / ${format(state.recoveries_succeeded)}`],['节点：状态 / 动作数 / 保持计数 / 恢复数',taskGraphRows(state)],['最近失败原因',state.failure_reason]]);
+    pairs($('agentState'),[['任务目标',state.task_goal||currentStart.goal||task.goal||latest.mission_validated?.goals],['当前子目标',state.active_node||ev.target_stage||latest.mission_goal?.goal],['已完成子目标',state.completed_subgoals],['可用技能',state.callable_skills||task.callable_skills],['当前候选技能',state.current_candidates],['执行 / 预算',`${format(state.executed_cycles??task.cycles)} / ${format(task.max_cycles)}`],['剩余预算',state.budget_remaining],['恢复尝试 / 已验证成功',`${format(state.recoveries)} / ${format(state.recoveries_succeeded)}`],['节点：状态 / 动作数 / 保持计数 / 恢复数',taskGraphRows(state)],['最近失败原因',state.failure_reason||latest.planning_event?.reason||task.failure_reason]]);
     $('taskNodeRows').replaceChildren();
     taskGraphRows(state).forEach(row=>cells($('taskNodeRows'),row));
     if(!taskGraphRows(state).length)cells($('taskNodeRows'),['当前日志未记录任务图','—','—','—','—']);

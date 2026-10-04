@@ -304,3 +304,78 @@ class TaskRuntimeTests(unittest.TestCase):
                            config=RuntimeConfig(recovery=True)).run()
         self.assertGreater(result['state']['recoveries'],0)
         self.assertEqual(result['state']['recoveries_succeeded'],0)
+
+    def test_pre_dispatch_observation_failure_reports_prior_steps_and_locks(self):
+        from wmal.agents.task_runtime import TaskRuntime,RuntimeConfig
+        class FailingSensor(Session):
+            def __init__(self, fail_at):
+                super().__init__()
+                self.reads=0
+                self.fail_at=fail_at
+            def observe(self):
+                self.reads+=1
+                if self.reads==self.fail_at:
+                    raise RuntimeError('sensor reception failed')
+                return super().observe()
+        for fail_at in (1,6,7):
+            with self.subTest(fail_at=fail_at):
+                session=FailingSensor(fail_at)
+                result=TaskRuntime(graph(),session,Predictor(),
+                                   config=RuntimeConfig(baseline='A1',horizon=1)).run()
+                self.assertEqual(result['state']['status'],'fault_latched')
+                self.assertEqual(result['state']['executed_cycles'],session.step_id)
+                self.assertEqual(session.step_id,0 if fail_at==1 else 1)
+                self.assertIsNotNone(session.fault_reason)
+                if fail_at==1:
+                    self.assertIn('initial_observation_failed',result['state']['failure_reason'])
+
+    def test_lost_sensor_after_receipt_counts_physics_without_fake_trace(self):
+        from wmal.agents.task_runtime import TaskRuntime,RuntimeConfig
+        class LostSensor(Session):
+            broken=False
+            def execute_actions(self,*args,**kwargs):
+                receipt=super().execute_actions(*args,**kwargs)
+                self.broken=True
+                return receipt
+            def observe(self):
+                if self.broken:
+                    raise RuntimeError('RGB reception failed after execution')
+                return super().observe()
+        session=LostSensor()
+        result=TaskRuntime(graph(),session,Predictor(),config=RuntimeConfig(baseline='A2')).run()
+        self.assertEqual(result['state']['status'],'fault_latched')
+        self.assertEqual(result['state']['executed_cycles'],1)
+        self.assertEqual(result['state']['budget_remaining']['actions'],79)
+        self.assertEqual(result['execution_ledger'][0]['after_step'],1)
+        self.assertEqual(result['execution_ledger'][0]['observed_steps'],0)
+        self.assertFalse(result['state']['belief']['context_valid'])
+        self.assertEqual(result['state']['completed_subgoals'],[])
+
+    def test_version_change_after_authorization_blocks_first_dispatch(self):
+        from wmal.agents.task_runtime import TaskRuntime,RuntimeConfig
+        session,predictor=Session(),Predictor()
+        def emit(event,payload):
+            if event=='execution_started':
+                predictor.version='changed-after-authorization'
+        result=TaskRuntime(graph(),session,predictor,config=RuntimeConfig(baseline='A2'),emit=emit).run()
+        self.assertEqual(result['state']['status'],'needs_review')
+        self.assertEqual(session.step_id,0)
+        self.assertEqual(result['state']['failure_reason'],'model_or_semantics_changed')
+
+    def test_fault_keeps_confirmed_prefix_rgb_state_and_residual_evidence(self):
+        import tempfile
+        from pathlib import Path
+        from wmal.agents.task_runtime import TaskRuntime,RuntimeConfig
+        with tempfile.TemporaryDirectory() as temporary:
+            result=TaskRuntime(graph(),Session(invalid=True),Predictor(),
+                               config=RuntimeConfig(baseline='A2'),artifact_dir=temporary).run()
+            self.assertEqual(result['state']['status'],'fault_latched')
+            feedback=result['state']['recent_feedback']
+            self.assertEqual(feedback['observed_step_id'],1)
+            self.assertEqual(feedback['actual_status'],'fault')
+            self.assertFalse(feedback['valid_for_history'])
+            self.assertEqual(len(result['prediction_residuals']),1)
+            with np.load(Path(temporary)/feedback['artifact']) as evidence:
+                self.assertEqual(evidence['observed_step_ids'].tolist(),[1])
+                self.assertEqual(str(evidence['execution_status']),'fault')
+                self.assertFalse(bool(evidence['valid_for_history']))

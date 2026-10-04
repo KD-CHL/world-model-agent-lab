@@ -36,6 +36,7 @@ def summarize(events, source_stopped=False):
     errors = {'state_error': [], 'position_error_m': [], 'rmse_rad': [], 'frame_mse': []}
     counts = Counter()
     legacy_index = 0
+    task_latest = {}
     for row in events:
         kind, payload = row['event'], row['payload']
         counts[kind] += 1
@@ -50,6 +51,8 @@ def summarize(events, source_stopped=False):
         explicit_id = isinstance(supplied_id, str) and bool(supplied_id)
         task_id = supplied_id if explicit_id else 'legacy-' + str(legacy_index)
         task = tasks.setdefault(task_id, {'task_id': task_id, 'status': 'incomplete', 'cycles': None})
+        # Projection identity includes inferred legacy groups; raw events stay unchanged.
+        task_latest.setdefault(task_id,{})[kind] = {**payload,'task_id':task_id}
         if kind == 'task_started':
             task.update(status='running', goal=payload.get('goal'), max_cycles=payload.get('max_cycles'),
                         baseline=payload.get('baseline'), callable_skills=payload.get('callable_skills'))
@@ -95,6 +98,7 @@ def summarize(events, source_stopped=False):
     statuses = Counter(task['status'] for task in tasks.values())
     return {'tasks': list(tasks.values()), 'task_status_counts': dict(statuses),
             'event_counts': dict(counts), 'latest': latest,
+            'current_task_latest':task_latest[next(reversed(tasks))] if tasks else {},
             'planning_latency_ms': statistics(latencies),
             'prediction_errors': {key: statistics(values) for key, values in errors.items()},
             'scope': 'descriptive; retained event window only', 'retained_events': len(events)}

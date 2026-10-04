@@ -13,7 +13,7 @@ from wmal.agents.task_graph import positive_int
 from wmal.agents.task_state import TaskState
 from wmal.agents.observation_history import ObservationHistory
 from wmal.agents.selection_policy import select_candidates
-from wmal.agents.task_execution import ExecutionManager
+from wmal.agents.task_execution import ExecutionManager, ObservationReceptionError
 from wmal.agents.recovery import RecoveryPolicy
 from wmal.agents.predictive_skill_agent import SkillCandidate
 from wmal.skills.research_contracts import JointSkills
@@ -153,7 +153,7 @@ class TaskRuntime:
                     'target':list(node.target),'completed_subgoals':list(self.state.completed_subgoals)})
         return True
 
-    def _save_artifact(self,decision_id,before,actions,mean,frames,bounds,trace):
+    def _save_artifact(self,decision_id,before,actions,mean,frames,bounds,trace,result):
         if self.artifact_dir is None or frames is None or not trace:
             return None
         # Decision UUIDs isolate repeated tasks without using user-supplied IDs as paths.
@@ -165,7 +165,10 @@ class TaskRuntime:
                 'observed_state_sequence':np.stack([v.state for v in trace]),
                 'observed_step_ids':np.array([v.step_id for v in trace]),
                 'episode_id':np.array(before.episode_id),'before_step':np.array(before.step_id),
-                'after_step':np.array(trace[-1].step_id),'decision_id':np.array(decision_id)}
+                'after_step':np.array(trace[-1].step_id),'decision_id':np.array(decision_id),
+                'execution_status':np.array(result['status']),
+                'physical_steps':np.array(result['executed']),
+                'valid_for_history':np.array(result['status']!='fault')}
         if bounds is not None:
             values['error_bounds']=bounds[:count]
         np.savez_compressed(self.artifact_dir/name,**values)
@@ -177,17 +180,22 @@ class TaskRuntime:
         self._started=True
         self._cancel=cancel
         started=time.monotonic()
-        self._observed=self.session.observe()
-        self.history.observe_current(self._observed)
         self.state.status='running'
+        try:
+            self._observed=self.session.observe()
+            self.history.observe_current(self._observed)
+        except (Exception,KeyboardInterrupt) as exc:
+            self.session.abort('initial_observation_failed')
+            self.state.belief['context_valid']=False
+            self._terminate('fault_latched',f'initial_observation_failed: {exc}')
         self._emit('task_started',{'schema':'wmal.monitor.task.v1','goal':list(self.graph.nodes[-1].target),
               'graph':self.graph.to_dict(),'graph_hash':self.graph.digest,'baseline':self.config.baseline,
               'recovery':self.config.recovery,'max_cycles':self.config.max_actions,
               'callable_skills':list(JointSkills.names),'model_version':self.model_version})
-        start_state=self._observed.state
-        if getattr(self.session,'fault_reason',None):
+        start_state=self._observed.state if self._observed is not None else None
+        if self.state.status=='running' and getattr(self.session,'fault_reason',None):
             self._terminate('fault_latched','session_fault')
-        elif (start_state.shape!=(4,) or np.linalg.norm(start_state[2:]-self.graph.start)>.015
+        elif self.state.status=='running' and start_state is not None and (start_state.shape!=(4,) or np.linalg.norm(start_state[2:]-self.graph.start)>.015
               or np.any(start_state[:2]<TARGET_LOW-.15) or np.any(start_state[:2]>TARGET_HIGH+.15)):
             self._terminate('needs_review','initial_pose_mismatch')
         while self.state.status=='running':
@@ -301,6 +309,10 @@ class TaskRuntime:
                      'skill':candidate.skill,'model':self.model_version,'calibration':self.calibration_hash}
             try:
                 grant=self.manager.authorize(before,actions,binding,time.monotonic()+self.config.planning_timeout_s)
+            except ObservationReceptionError as exc:
+                state.belief['context_valid']=False
+                self._terminate('fault_latched',f'authorization_observation_failed: {exc}')
+                return
             except ValueError as exc:
                 self._terminate('needs_review',f'authorization_rejected: {exc}')
                 return
@@ -333,14 +345,14 @@ class TaskRuntime:
                 if mode=='reach' and verifier.last['matched'] and (node.hold_steps or repairing):
                     return 'reach_verified'
                 return None
-            result=self.manager.execute(grant,stop=self._cancel,on_step=on_step)
+            result=self.manager.execute(grant,stop=self._cancel,on_step=on_step,
+                                        validate_binding=self._versions_valid)
             count=result['executed']
             state.executed_cycles+=count
             entry['actions']+=count
             frozen_offset+=count
             ledger={k:v for k,v in result.items() if k not in ('trace','final')}
-            ledger.update(node_id=node.node_id,before_step=before.step_id,
-                          after_step=result['final'].step_id)
+            ledger.update(node_id=node.node_id,before_step=before.step_id)
             self._ledger.append(ledger)
             trace=result['trace']
             if trace:
@@ -349,8 +361,7 @@ class TaskRuntime:
                 state.belief['context_valid']=False
                 self._terminate('fault_latched',result['reason'])
                 self._emit('execution_failed',ledger)
-                return
-            if trace:
+            elif trace:
                 try:
                     validated=self.history.validate_execution(trace[-1],actions[:count],trace)
                     self.history.commit_execution(validated,actions[:count])
@@ -359,24 +370,29 @@ class TaskRuntime:
                     state.belief['context_valid']=False
                     self._terminate('fault_latched',str(exc))
                     return
-            state.belief.update(self.history.describe(),model_version=self.model_version)
+            if result['status']!='fault':
+                state.belief.update(self.history.describe(),model_version=self.model_version)
             feedback={'decision_id':grant.decision_id,'skill':candidate.skill,'executed_prefix':count,
-                      'authorized_prefix':prefix,'observed_state':self._observed.state.tolist(),
+                      'authorized_prefix':prefix,'observed_steps':len(trace),
+                      'observed_state':trace[-1].state.tolist() if trace else None,
+                      'observed_step_id':trace[-1].step_id if trace else None,
+                      'valid_for_history':result['status']!='fault',
                       'actual_status':result['status'],'reason':result['reason']}
             if mean is not None and trace:
+                observed_count=len(trace)
                 actual=np.stack([v.state for v in trace])
-                errors=np.abs(actual-mean[:count])
+                errors=np.abs(actual-mean[:observed_count])
                 rms=np.sqrt(np.mean(errors**2,axis=1))
                 feedback.update(state_error=float(rms[-1]),state_rmse_by_step=rms.tolist(),
-                                predicted_state=mean[count-1].tolist())
+                                predicted_state=mean[observed_count-1].tolist())
                 if bounds is not None:
-                    violations=np.any(errors>bounds[:count],axis=1)
+                    violations=np.any(errors>bounds[:observed_count],axis=1)
                     feedback.update(outside_calibration_by_step=violations.tolist(),
-                                    outside_calibration=bool(violations.any()),error_bound=bounds[count-1].tolist())
+                                    outside_calibration=bool(violations.any()),error_bound=bounds[observed_count-1].tolist())
                 self._residuals.append({'node_id':node.node_id,'rmse':rms.tolist(),
-                      'bounds':None if bounds is None else bounds[:count].tolist(),
+                      'bounds':None if bounds is None else bounds[:observed_count].tolist(),
                       'absolute_error':errors.tolist()})
-            artifact=self._save_artifact(grant.decision_id,before,actions,mean,frames,bounds,trace)
+            artifact=self._save_artifact(grant.decision_id,before,actions,mean,frames,bounds,trace,result)
             if artifact:
                 feedback['artifact']=artifact
             state.recent_feedback=feedback
@@ -385,6 +401,8 @@ class TaskRuntime:
                 self._emit('execution_stopped',ledger)
             self._budgets(node)
             self._emit('agent_state',{'state':state.snapshot()})
+            if result['status']=='fault':
+                return
             reason=result['reason']
             if reason=='canceled':
                 self._terminate('canceled','canceled')

@@ -21,3 +21,15 @@ class TaskMonitorTests(unittest.TestCase):
             'state':{'status':'fault_latched','executed_cycles':1,'failure_reason':'missing_trace'}}}])
         self.assertEqual(summary['tasks'][0]['status'],'fault_latched')
         self.assertEqual(summary['tasks'][0]['cycles'],1)
+
+    def test_current_task_evidence_excludes_other_explicit_and_legacy_tasks(self):
+        rows=[{'event':'feedback','payload':{'observed_state':[9,9]}},
+              {'event':'task_result','payload':{'status':'succeeded'}},
+              {'event':'task_started','payload':{'task_id':'new','goal':[1,2]}}]
+        summary=summarize(rows)
+        self.assertNotIn('feedback',summary['current_task_latest'])
+        self.assertEqual(summary['current_task_latest']['task_started']['task_id'],'new')
+        legacy=summarize(rows[:2])
+        self.assertEqual(legacy['current_task_latest']['feedback']['task_id'],'legacy-0')
+        self.assertEqual(legacy['current_task_latest']['feedback']['observed_state'],[9,9])
+        self.assertNotIn('task_id',rows[0]['payload'])

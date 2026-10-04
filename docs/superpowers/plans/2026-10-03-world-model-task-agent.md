@@ -123,15 +123,15 @@ Modify monitor/state.py、static/monitor.js、README.md；Test `tests/test_task_
 **Interfaces:** TaskRuntime与CLI使用前面接口；实际报告含baseline/R开关、节点成功、
 真实步数、恢复触发/成功、拒绝、预测残差、完整工件与终态。
 
-- [ ] 写失败测试：真实MuJoCo任务保持推进sim time、扰动清零、fault后无后续动作；
+- [x] 写失败测试：真实MuJoCo任务保持推进sim time、扰动清零、fault后无后续动作；
   启动实际配置并读取真实task_result，不断言没有依据的A3性能优势。
-- [ ] 运行新集成测试；Expected: 新物理验收尚未成立，定位具体缺口后实现必要边界。
-- [ ] 使用现有冻结检查点分别执行干净场景A1/A2/A3开发smoke和一次+.5N·m受控扰动；
+- [x] 运行新集成测试；Expected: 新物理验收尚未成立，定位具体缺口后实现必要边界。
+- [x] 使用现有冻结检查点分别执行干净场景A1/A2/A3开发smoke和一次+.5N·m受控扰动；
   每次新目录，失败和未触发均保留。学习型五节点未通过则报告，不改判据。
-- [ ] 运行ROS-overlay完整 `python -m unittest discover -s tests -v`、Node测试、
+- [x] 运行ROS-overlay完整 `python -m unittest discover -s tests -v`、Node测试、
   `git diff --check` 与编译检查；Expected: 全部自动化测试通过，无虚构验收。
-- [ ] 独立整体代码审查，修复重要问题并补红绿测试；记录不可用审查或遗留项。
-- [ ] 提交 `test: record task-agent simulation acceptance and limitations`，保留开发分支，不推送。
+- [x] 独立整体代码审查，修复重要问题并补红绿测试；记录不可用审查或遗留项。
+- [x] 提交 `test: record task-agent simulation acceptance and limitations`，保留开发分支，不推送。
 
 ## Execution Decision
 
