@@ -61,10 +61,16 @@ class TaskRuntime:
             raise ValueError('This runtime requires two actions/four task-state values')
         if config.horizon>predictor.metadata.get('max_horizon',0):
             raise ValueError('Requested horizon exceeds trained horizon')
+        self.controller_profile=deepcopy(getattr(session,'controller_profile',{'profile':'g1_joint_pd_v1'}))
         if config.baseline=='A3':
             if calibration is None:
                 raise ValueError('A3 requires independent frozen calibration')
             calibration.validate_for(predictor.version,predictor.semantics)
+            validate_controller=getattr(calibration,'validate_controller',None)
+            if callable(validate_controller):
+                validate_controller(deepcopy(self.controller_profile))
+            elif self.controller_profile.get('profile')!='g1_joint_pd_v1':
+                raise ValueError('Nonlegacy controller requires controller-bound calibration')
         self.graph,self.session,self.predictor,self.calibration=graph,session,predictor,calibration
         self.config,self.emit_sink=config,emit
         self.artifact_dir=Path(artifact_dir) if artifact_dir is not None else None
@@ -133,10 +139,18 @@ class TaskRuntime:
     def _versions_valid(self):
         if self.predictor.version!=self.model_version or self.predictor.semantics!=self.semantics:
             return False
+        if getattr(self.session,'controller_profile',{'profile':'g1_joint_pd_v1'})!=self.controller_profile:
+            return False
         if self.calibration is not None:
             current=sha256(json.dumps(vars(self.calibration),sort_keys=True,default=str).encode()).hexdigest()
             if current!=self.calibration_hash:
                 return False
+            validate_controller=getattr(self.calibration,'validate_controller',None)
+            if callable(validate_controller):
+                try:
+                    validate_controller(deepcopy(self.controller_profile))
+                except (ValueError,RuntimeError,KeyError,TypeError):
+                    return False
         return self.session.semantics==self.semantics
 
     def _recover(self,node,reason):
@@ -212,6 +226,7 @@ class TaskRuntime:
         self._emit('agent_state',{'state':self.state.snapshot()})
         report={'schema':'wmal.task_result.v1','baseline':self.config.baseline,'recovery':self.config.recovery,
                 'seed':self.config.seed,'model_version':self.model_version,'graph_hash':self.graph.digest,
+                'controller_profile':deepcopy(self.controller_profile),
                 'elapsed_s':time.monotonic()-started,'state':self.state.snapshot(),
                 'execution_ledger':deepcopy(self._ledger),'prediction_residuals':deepcopy(self._residuals)}
         self._emit('task_result',report)
@@ -226,6 +241,7 @@ class TaskRuntime:
         mode='hold' if node.skill=='joint_hold' else 'reach'
         repairing=False
         progress=[]
+        settling_cycles=0
         frozen_offset=0
         consecutive_rejections=0
         self._emit('node_state',{'node':deepcopy(entry),'target':list(node.target),'skill':node.skill})
@@ -240,7 +256,7 @@ class TaskRuntime:
             if not self._versions_valid():
                 self._terminate('needs_review','model_or_semantics_changed')
                 return
-            matched=verifier.matches(self._observed)[0]
+            matched,_,command_error=verifier.matches(self._observed)
             if mode=='hold' and (not matched or not JointSkills.ready(self._observed,replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps)))):
                 verifier.count=0
                 entry['hold_count']=0
@@ -261,7 +277,14 @@ class TaskRuntime:
                     self._complete(node,entry)
                     return
             horizon=min(self.config.horizon,state.budget_remaining['actions'],state.budget_remaining['node_actions'])
-            if mode=='hold':
+            settling=(mode=='reach' and command_error<=.015 and self.config.baseline!='A0')
+            if settling:
+                # Keep the in-tolerance command stable. Give at most four real
+                # zero-action cycles before applying progress-based stall
+                # detection; sensor reads and rejected plans consume no grace.
+                horizon=min(horizon,max(1,4-settling_cycles))
+                active=replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps))
+            elif mode=='hold':
                 horizon=min(horizon,max(1,node.hold_steps-verifier.count))
                 active=replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps))
             else:
@@ -274,7 +297,7 @@ class TaskRuntime:
                 actions=frozen[frozen_offset:frozen_offset+horizon]
                 candidates=[SkillCandidate(active.skill,actions)]
             else:
-                candidates=JointSkills.candidates(self._observed,active,horizon,self.rng)
+                candidates=JointSkills.candidates(self._observed,active,horizon,self.rng,goal_arrival=True)
             state.decision_count+=1
             state.replans+=1
             planned_at=time.monotonic()
@@ -283,7 +306,7 @@ class TaskRuntime:
                     baseline=self.config.baseline,calibration=self.calibration,error_budget=self.config.error_budget,
                     scale=self.scale,remaining=horizon,state_lower=np.concatenate([TARGET_LOW-.15,TARGET_LOW]),
                     state_upper=np.concatenate([TARGET_HIGH+.15,TARGET_HIGH]),
-                    history=self.history if self.context_steps else None)
+                    history=self.history if self.context_steps else None,joint_target=np.asarray(node.target))
                 if not self._versions_valid():
                     raise ValueError('Model/semantics changed during prediction')
             except (ValueError,RuntimeError,KeyError,TypeError) as exc:
@@ -442,11 +465,20 @@ class TaskRuntime:
                 self._complete(node,entry)
                 return
             if mode=='reach' and trace:
-                progress.extend(float(np.linalg.norm(v.state[:2]-node.target)) for v in trace)
-                if len(progress)>=4 and progress[-4]-progress[-1]<.005:
+                for offset,observed in enumerate(trace):
+                    _,measured_error,command_error=verifier.matches(observed)
+                    stable_command=(command_error<=.015 and np.all(np.abs(actions[offset])<=1e-12))
+                    settling_cycles=min(4,settling_cycles+1) if stable_command else 0
+                    progress.append((measured_error,command_error))
+                    progress=progress[-4:]
+                no_progress=(len(progress)==4 and all(
+                    progress[0][axis]-progress[-1][axis]<.005 for axis in (0,1)))
+                settling_ready=(command_error>.015 or settling_cycles>=4 or self.config.baseline=='A0')
+                if no_progress and settling_ready:
                     if not self._recover(node,'stalled'):
                         return
                     progress=[]
+                    settling_cycles=0
                     # Same finite candidate set, next seeded proposals; no action replay.
                     state.status='running'
                     entry['status']='running'

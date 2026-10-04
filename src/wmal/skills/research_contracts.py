@@ -17,7 +17,8 @@ class JointSkills:
         return node.skill != 'joint_hold' or np.linalg.norm(state[2:] - node.target) <= .015
 
     @staticmethod
-    def candidates(observation, node, horizon, rng):
+    def candidates(observation, node, horizon, rng, *, goal_arrival=False):
+        """Opt-in arrival profile caps each step's residual, then settles at zero."""
         if type(horizon) is not int or not 1 <= horizon <= 4:
             raise ValueError('Research prediction horizon must be 1..4')
         if not JointSkills.ready(observation, node):
@@ -29,11 +30,16 @@ class JointSkills:
         proposals = [np.tile(direction*.04*gain,(horizon,1)) for gain in (1.,.5,-.5,0.)]
         proposals.extend(rng.uniform(-.04,.04,(horizon,2)) for _ in range(8))
         result = []
-        for proposal in proposals:
+        for index, proposal in enumerate(proposals):
             target = current.copy()
             actions = []
             for delta in proposal:
-                updated = np.clip(target+delta, TARGET_LOW+.005, TARGET_HIGH-.005)
+                if goal_arrival and index < 2:
+                    cap = .04 if index == 0 else .02
+                    delta = np.clip(np.asarray(node.target)-target, -cap, cap)
+                    updated = np.clip(target+delta, TARGET_LOW, TARGET_HIGH)
+                else:
+                    updated = np.clip(target+delta, TARGET_LOW+.005, TARGET_HIGH-.005)
                 actions.append(updated-target)
                 target = updated
             values = np.asarray(actions)

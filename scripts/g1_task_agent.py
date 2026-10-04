@@ -92,6 +92,8 @@ def main(argv=None):
     parser.add_argument('--horizon',type=int)
     parser.add_argument('--seed',type=int)
     parser.add_argument('--device',choices=('cpu','cuda'),default='cpu')
+    parser.add_argument('--controller',choices=('legacy','gravity_compensated'),default='legacy',
+                        help='Fixed low-level profile; A3 requires calibration bound to this controller')
     parser.add_argument('--viewer',action='store_true')
     parser.add_argument('--monitor',action='store_true')
     parser.add_argument('--monitor-port',type=int,default=8766)
@@ -127,12 +129,9 @@ def main(argv=None):
         implementations={name:sha256_file(root/name) for name in (
             'src/wmal/agents/task_runtime.py','src/wmal/agents/task_execution.py',
             'src/wmal/agents/selection_policy.py','src/wmal/skills/research_contracts.py',
-            'src/wmal/skills/task_verifier.py','src/wmal/envs/visual_workcell.py')}
-        atomic_json(output/'run_manifest.json',build_manifest('g1_task_agent',config.seed,inputs,
-             parameters={**asdict(config),'scene':scene,'disturbance':args.disturbance},
-             graph=graph.to_dict(),graph_hash=graph.digest,implementation_hashes=implementations,
-             semantics=model.semantics,model_version=model.version,
-             controller='fixed G1 joint target-delta servo; not learned here'))
+            'src/wmal/skills/task_verifier.py','src/wmal/envs/visual_workcell.py',
+            'src/wmal/models/horizon_calibration.py','src/wmal/models/visual_latent.py',
+            'src/wmal/models/categorical_rssm.py','scripts/g1_task_agent.py')}
         with ExitStack() as stack:
             monitor=None
             if args.monitor:
@@ -142,7 +141,20 @@ def main(argv=None):
                 print(f'Agent monitor: {monitor.url}',flush=True)
             physical=stack.enter_context(VisualWorkcellSession(scene,image_size=model.config.image_size,
                  camera=model.semantics['camera'],period_s=model.semantics['period_s'],seed=config.seed,
-                 frame_publisher=monitor.publisher if monitor else None,realtime=args.realtime))
+                 frame_publisher=monitor.publisher if monitor else None,realtime=args.realtime,
+                 controller=args.controller))
+            if config.baseline=='A3':
+                calibration.validate_controller(physical.controller_profile)
+            atomic_json(output/'run_manifest.json',build_manifest('g1_task_agent',config.seed,inputs,
+                 parameters={**asdict(config),'scene':scene,'disturbance':args.disturbance,
+                             'controller':args.controller},
+                 graph=graph.to_dict(),graph_hash=graph.digest,implementation_hashes=implementations,
+                 semantics=model.semantics,model_version=model.version,
+                 controller_profile=physical.controller_profile,
+                 checkpoint_training_controller=model.metadata.get('training_source',{}).get(
+                     'controller_profile',{'profile':'g1_joint_pd_v1'}),
+                 controller_transfer=physical.controller_profile!=model.metadata.get('training_source',{}).get(
+                     'controller_profile',{'profile':'g1_joint_pd_v1'})))
             physical.reset(graph.start)
             session=ShoulderPulse(physical) if args.disturbance=='shoulder-pulse' else physical
             viewer=physical.open_viewer() if args.viewer else None

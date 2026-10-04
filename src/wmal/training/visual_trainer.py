@@ -237,17 +237,26 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     return report
 
 
-def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None):
+def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None,
+                    allow_controller_transfer=False):
     from wmal.models.horizon_calibration import HorizonCalibration
     model=VisualWorldModel.load(checkpoint,device=device)
     dataset=VisualDataset(manifest,'test',horizon=horizon,context_steps=model.config.context_steps)
     if dataset.semantics!=model.semantics:
         raise ValueError('Evaluation dataset/control semantics mismatch')
+    controller=dataset.manifest.get('source',{}).get('controller_profile',{'profile':'g1_joint_pd_v1'})
+    training_source=model.metadata.get('training_source',{})
+    trained_controller=training_source.get('controller_profile',{'profile':'g1_joint_pd_v1'}) if isinstance(training_source,dict) else {'profile':'g1_joint_pd_v1'}
+    if controller!=trained_controller and not allow_controller_transfer:
+        raise ValueError('Evaluation controller transfer requires explicit --allow-controller-transfer')
     lineage=read_episode_lineage(model.metadata)
     assert_unexposed_episodes(dataset.rows,[lineage['train'],lineage['selection']],context='Evaluation')
     bound_model=HorizonCalibration.load(calibration) if calibration else None
     if bound_model:
         bound_model.validate_for(model.version,model.semantics)
+        bound_model.validate_controller(controller)
+        if bound_model.prediction_scope!=dataset.manifest.get('source',{}).get('prediction_scope'):
+            raise ValueError('Evaluation/calibration deployment scope mismatch')
         if set(bound_model.episode_ids).intersection(r['episode_id'] for r in dataset.rows):
             raise ValueError('Calibration overlaps test episodes')
     frame,state,persist_frame,persist_state,sensitivity=[],[],[],[],[]
@@ -279,6 +288,8 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
             key=sample['episode_id']
             coverage[key]=covered if key not in coverage else coverage[key]&covered
     report={'schema':'wmal.visual_evaluation.v1','split':'test','model_version':model.version,
+            'controller_profile':controller,'controller_transfer':controller!=trained_controller,
+            'prediction_scope':dataset.manifest.get('source',{}).get('prediction_scope'),
             'context_steps':model.config.context_steps,
             'manifest_sha256':sha256_file(manifest),'episodes':len(dataset.rows),'windows':len(dataset),
             'frame_mse_by_horizon':np.mean(frame,0).tolist(),
