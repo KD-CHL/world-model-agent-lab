@@ -446,6 +446,78 @@ class EmbodiedSequenceTests(unittest.TestCase):
         right = self.data.EmbodiedDataset(second, 'train', horizon=2, context_steps=0)
         self.assertNotEqual(left[0]['sample_id'], right[0]['sample_id'])
 
+    # Catches a camera-specific ID replacing a known original repo/episode ID.
+    def test_legacy_import_rejects_conflicting_canonical_original_ids(self):
+        manifest = self.legacy(wide=True)
+        payload = json.loads(manifest.read_text())
+        payload['source'].update(kind='lerobot_v2.1_import',
+            dataset={'repo_id': 'same/repo', 'revision': 'r1', 'license': 'MIT'},
+            source_episodes=[{'episode_index': i + 7, 'parquet_sha256': str(i + 1) * 64,
+                              'video_sha256': str(i + 5) * 64}
+                             for i in range(4)])
+        for i, row in enumerate(payload['episodes']):
+            row['episode_id'] = f'lerobot_{i + 7}'
+            row['source_episode_id'] = f'same/repo:episode:{i + 7}'
+        profile = self.profile(physical_order=[f'q{i}' for i in range(16)], command_order=[],
+            action_order=[f'j{i}' for i in range(16)], action_schema='external.absolute.v1',
+            camera_ids=['front'], event_names=[], physical_units=['rad'] * 16,
+            command_units=[], action_units=['rad'] * 16, command_rule='none',
+            controller={'profile': 'external'}, origin=payload['source'])
+        from wmal.logging.manifest import atomic_json
+        atomic_json(manifest, payload)
+        adapter = self.data.from_visual_manifest(manifest, physical_indices=list(range(16)),
+            command_indices=[], command_rule='none', profile=profile)
+        lineage = self.data.validate_lineage([adapter['episodes'][0]])
+        self.assertIn('same/repo:episode:7', lineage['train']['episode_ids'])
+        # Different camera records may have different hashes; the canonical ID
+        # alone must still prevent renamed test re-exports of episode 7.
+        candidate = dict(adapter['episodes'][0], episode_id='renamed-side', split='test',
+                         sha256='a' * 64, source_sha256='b' * 64, source_hashes=['c' * 64])
+        with self.assertRaisesRegex(ValueError, 'overlap'):
+            self.data.validate_lineage([adapter['episodes'][0], candidate])
+        with self.assertRaisesRegex(ValueError, 'overlap'):
+            self.data.validate_lineage([candidate], lineage)
+        for camera, split, digest in [('front', 'train', 'a'), ('side', 'test', 'b')]:
+            with self.subTest(camera=camera):
+                exported = json.loads(json.dumps(payload))
+                # The same original episode, with camera-specific ID AND hashes.
+                exported['episodes'][0].update(source_episode_id=f'reexport-{camera}', source_sha256=digest * 64)
+                exported['source']['source_episodes'][0].update(parquet_sha256=digest * 64,
+                                                               video_sha256=('c' if camera == 'front' else 'd') * 64)
+                if split == 'test':
+                    exported['episodes'][0]['split'], exported['episodes'][-1]['split'] = 'test', 'train'
+                atomic_json(manifest, exported)
+                with self.assertRaises(ValueError):
+                    self.data.from_visual_manifest(manifest, physical_indices=list(range(16)),
+                        command_indices=[], command_rule='none', profile=profile)
+
+    # Catches bypassing known radians through reordered/subset offline mappings.
+    def test_g1_offline_mappings_preserve_units_for_all_selected_coordinates(self):
+        manifest = self.legacy()
+        base = self.data.from_visual_manifest(manifest, physical_indices=[0, 1],
+            command_indices=[2, 3], command_rule='joint_delta')['profile']
+        state_order = json.loads(manifest.read_text())['semantics']['state_order']
+        for physical, commands, expected_physical, expected_commands in [
+                ([1, 0], [], [[2, 0], [4, 2], [6, 4]], [[], [], []]),
+                ([1], [2], [[2], [4], [6]], [[10], [11], [14]]),
+                ([0], [3, 2], [[0], [2], [4]], [[20, 10], [18, 11], [22, 14]])]:
+            profile = base | dict(physical_order=[state_order[i] for i in physical],
+                command_order=[state_order[i] for i in commands], physical_units=['rad'] * len(physical),
+                command_units=['rad'] * len(commands), command_rule='none')
+            adapter = self.data.from_visual_manifest(manifest, physical_indices=physical,
+                command_indices=commands, command_rule='none', profile=profile)
+            sample = self.data.EmbodiedDataset(adapter, 'train', horizon=2, context_steps=0)[0]
+            np.testing.assert_array_equal(sample['physical'], expected_physical)
+            np.testing.assert_array_equal(sample['commands'], expected_commands)
+            np.testing.assert_array_equal(sample['actions'], [[1, -2], [3, 4]])
+            for key in ('physical_units', 'command_units', 'action_units'):
+                if not profile[key]:
+                    continue
+                with self.subTest(mapping=(physical, commands), units=key), self.assertRaises(ValueError):
+                    self.data.from_visual_manifest(manifest, physical_indices=physical,
+                        command_indices=commands, command_rule='none',
+                        profile=profile | {key: ['degree'] * len(profile[key])})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -258,7 +258,10 @@ def _legacy_origins(rows, source):
             if entry is None:
                 raise ValueError('Missing original source episode hash record')
             parquet, video = _hash(entry.get('parquet_sha256')), _hash(entry.get('video_sha256'))
-            row.setdefault('source_episode_id', f'{name}:episode:{entry["episode_index"]}')
+            canonical_id = f'{name}:episode:{entry["episode_index"]}'
+            if 'source_episode_id' in row and row['source_episode_id'] != canonical_id:
+                raise ValueError('Declared original source episode ID conflicts with canonical identity')
+            row['source_episode_id'] = canonical_id
             row.setdefault('source_sha256', parquet)
             row['source_hashes'] = sorted(set(row.get('source_hashes', [])) | {parquet, video})
         else:
@@ -269,8 +272,10 @@ def _legacy_origins(rows, source):
 def from_visual_manifest(manifest, *, physical_indices, command_indices, command_rule, profile=None):
     """Return an in-memory read-only legacy descriptor retaining the source root.
 
-    G1 is recognized only by its exact 4D state/2D action schema and explicit
-    [0,1]/[2,3] mapping. Other robots require an explicit profile (including units,
+    Known G1 units follow its original 4D state/2D action schema independently
+    of the selected coordinates. Only the explicit [0,1]/[2,3] mapping justifies
+    known command inference. Other mappings require an explicit offline profile.
+    Other robots require an explicit profile (including units,
     controller and origin); all action dimensions are retained. ``joint_delta``
     is justified only for the verified G1 legacy interface. ``none`` is offline.
     """
@@ -282,10 +287,10 @@ def from_visual_manifest(manifest, *, physical_indices, command_indices, command
     commands = _mapping(command_indices, len(semantics['state_order']), 'command', empty=True)
     if set(physical) & set(commands):
         raise ValueError('Physical and command mappings cannot overlap')
-    is_g1 = (semantics['action_schema'] == _G1_ACTION_SCHEMA
+    known_g1 = (semantics['action_schema'] == _G1_ACTION_SCHEMA
              and tuple(semantics['action_order']) == _G1_JOINTS
-             and tuple(semantics['state_order']) == _G1_JOINTS + tuple(j + '_target' for j in _G1_JOINTS)
-             and physical == [0, 1] and commands == [2, 3])
+             and tuple(semantics['state_order']) == _G1_JOINTS + tuple(j + '_target' for j in _G1_JOINTS))
+    is_g1 = known_g1 and physical == [0, 1] and commands == [2, 3]
     if command_rule not in ('joint_delta', 'none') or (command_rule == 'joint_delta' and not is_g1):
         raise ValueError('No justified legacy known-command semantics for this mapping')
     controller = source.get('controller_profile')
@@ -300,8 +305,9 @@ def from_visual_manifest(manifest, *, physical_indices, command_indices, command
             command_units=['rad'] * 2, action_units=['rad'] * 2, command_rule=command_rule,
             controller=controller, origin={**source, 'manifest_sha256': sha256_file(path)})
     profile = ObservationProfile.from_dict(profile.to_dict() if isinstance(profile, ObservationProfile) else profile)
-    if is_g1 and (profile.physical_units != ('rad', 'rad')
-                  or profile.command_units != ('rad', 'rad') or profile.action_units != ('rad', 'rad')):
+    if known_g1 and (profile.physical_units != ('rad',) * len(physical)
+                     or profile.command_units != ('rad',) * len(commands)
+                     or profile.action_units != ('rad',) * len(semantics['action_order'])):
         raise ValueError('The verified G1 coordinates are radians; explicit conversion is required')
     if controller is not None and profile.controller != controller:
         raise ValueError('Declared controller differs from recorded legacy controller')
