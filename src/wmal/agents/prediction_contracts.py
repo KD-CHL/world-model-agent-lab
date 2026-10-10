@@ -271,7 +271,10 @@ def validate_response(request, response, *, now=None):
     protocol = response.get('protocol')
     if (not isinstance(protocol, dict) or content_hash(protocol) != request.protocol_hash
             or protocol.get('schema') != PREDICTION_SCHEMA or protocol.get('model_version') != request.model_version
-            or protocol.get('profile') != request.profile.to_dict()
+            # Protocol hashes retain training provenance; request hashes retain
+            # observation provenance. Independent origins need only compatible
+            # robot/control/camera semantics, as in provider.validate_profile.
+            or content_hash(profile_semantics(protocol.get('profile'))) != content_hash(profile_semantics(request.profile))
             or protocol.get('samples') != request.samples or protocol.get('mode') != request.mode
             or protocol.get('members') != request.member_count
             or protocol.get('context_steps') != request.context_steps or protocol.get('max_horizon') != request.max_horizon

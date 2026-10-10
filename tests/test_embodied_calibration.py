@@ -175,6 +175,7 @@ class EmbodiedCalibrationTests(unittest.TestCase):
         scope = {'command_lower': [100, 210], 'command_upper': [115, 230], 'max_action_delta': 4}
         with self.assertRaises(ValueError): api.EmbodiedCalibration.fit(records, model, scope=scope)
         rgb, physical, commands, past, actions = inputs()
+        actions = np.concatenate([actions, [[0, 0]]])  # Exactly three prediction transitions.
         for record in records:
             record['context'] = dict(physical=physical, commands=commands, actions=actions)
         cal = api.EmbodiedCalibration.fit(records, model, scope=scope)
@@ -182,6 +183,41 @@ class EmbodiedCalibrationTests(unittest.TestCase):
         self.assertFalse(cal.allows_scope(physical, commands, actions*10, model=model))
         records[0]['context']['commands'] = np.array([[999, 999]])
         with self.assertRaises(ValueError): api.EmbodiedCalibration.fit(records, model, scope=scope)
+
+    # A short checked prefix cannot authorize a longer prediction/target horizon.
+    def test_scoped_records_require_prediction_action_horizon_alignment(self):
+        api = self.api(); model = self.clean_model()
+        scope = {'command_lower': [100, 210], 'command_upper': [115, 230], 'max_action_delta': 4}
+        _, physical, commands, _, _ = inputs()
+        for count in (1, 2, 4):
+            records = self.records(model)
+            for record in records:
+                record['context'] = dict(physical=physical, commands=commands, actions=np.zeros((count, 2)))
+            with self.subTest(action_count=count), self.assertRaises(ValueError):
+                api.EmbodiedCalibration.fit(records, model, scope=scope)
+
+    # The third raw action reaches shoulder command116, outside the declared115
+    # bound. Checking only its first two actions would hide this suffix violation.
+    def test_scoped_records_reject_out_of_scope_final_action(self):
+        api = self.api(); model = self.clean_model()
+        scope = {'command_lower': [100, 210], 'command_upper': [115, 230], 'max_action_delta': 4}
+        _, physical, commands, _, _ = inputs()
+        full_actions = np.array([[1, -2], [3, 4], [2, 0]])
+        for checked_prefix in (2, 3):
+            records = self.records(model)
+            for record in records:
+                record['prediction']['known_commands'] = np.array([[111, 218], [114, 222], [116, 222]])
+                record['context'] = dict(physical=physical, commands=commands,
+                                         actions=full_actions[:checked_prefix])
+            with self.subTest(checked_prefix=checked_prefix), self.assertRaises(ValueError):
+                api.EmbodiedCalibration.fit(records, model, scope=scope)
+        # An aligned three-action sequence ending exactly at the boundary is valid.
+        records = self.records(model)
+        for record in records:
+            record['context'] = dict(physical=physical, commands=commands,
+                                     actions=np.array([[1, -2], [3, 4], [1, 0]]))
+        calibration = api.EmbodiedCalibration.fit(records, model, scope=scope)
+        np.testing.assert_array_equal(calibration.bounds(horizon=3, model=model), [[10, 20]]*3)
 
     # Dataset-level origin ancestry remains excluded, not only the same exported row ID.
     def test_dataset_original_calibration_ancestry_rejected(self):

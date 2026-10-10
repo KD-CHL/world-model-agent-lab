@@ -368,6 +368,51 @@ class EmbodiedProviderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapter.predict_context(rgb[:, 0], np.concatenate([physical, commands], -1), past, actions)
 
+    # Comparing full profiles wrongly treats an independent collection origin as
+    # a control change; removing provenance from the hashes would lose binding.
+    def test_response_accepts_independent_origin_without_erasing_identity(self):
+        model = make_model(self.api())
+        contracts = importlib.import_module('wmal.agents.prediction_contracts')
+        independent = profile(origin={'dataset': 'independent-request', 'manifest_sha256': 'c'*64,
+                                      'collection_seed': 77})
+        model.validate_profile(independent)
+        rgb, physical, commands, past, actions = inputs()
+        fields = dict(request_id='r', decision_id='d', run_id='run', task_id='t', node_id='n',
+            episode_id='ep', step_id=0, context_step_ids=[0], observation_times=[0.],
+            candidate_id='c', skill_version='v', model_version=model.version,
+            protocol_hash=model.protocol_hash(), rgb=rgb, physical=physical, commands=commands,
+            past_actions=past, actions=actions, deadline=time.monotonic()+30, timeout_s=10,
+            context_steps=2, max_horizon=3, member_count=1)
+        request = contracts.PredictionRequest(**fields, profile=independent, controller=independent.controller)
+        prediction = model.predict_context(*inputs())
+        try:
+            response = request.bind_response(prediction)
+        except ValueError as exc:
+            self.fail(f'Origin-only semantic compatibility was rejected: {exc}')
+        contracts.validate_response(request, response)
+        self.assertEqual(response['profile']['origin'], {'dataset': 'independent-request',
+            'manifest_sha256': 'c'*64, 'collection_seed': 77})
+        self.assertEqual(response['protocol']['profile']['origin'], {'dataset': 'train'})
+        original_request = contracts.PredictionRequest(**fields, profile=model.profile,
+                                                     controller=model.profile.controller)
+        self.assertNotEqual(request.request_hash, original_request.request_hash)
+        self.assertNotEqual(request.binding()['profile_hash'], original_request.binding()['profile_hash'])
+        self.assertEqual(model.protocol_hash(), fields['protocol_hash'])
+        for side in ('request', 'model'):
+            bad = dict(response)
+            if side == 'request':
+                bad['profile'] = model.profile.to_dict()
+            else:
+                bad['protocol'] = dict(response['protocol'], profile=independent.to_dict())
+            with self.subTest(origin_side=side), self.assertRaises(ValueError):
+                contracts.validate_response(request, bad)
+        for change in ({'physical_units': ['deg', 'rad']}, {'camera_ids': ['other-camera']},
+                       {'controller': {'profile': 'fixture_pd', 'gains': [9, 9]}}):
+            changed = profile(origin=independent.origin, **change)
+            changed_request = contracts.PredictionRequest(**fields, profile=changed, controller=changed.controller)
+            with self.subTest(semantic_field=list(change)), self.assertRaises(ValueError):
+                changed_request.bind_response(prediction)
+
 
 if __name__ == '__main__':
     unittest.main()

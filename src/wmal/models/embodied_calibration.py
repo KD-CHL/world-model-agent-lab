@@ -86,6 +86,8 @@ class EmbodiedCalibration:
         Explicit records require split/episode_id/sha256/source_episode_id/
         source_sha256/source_hashes, profile, prediction (provider result), and
         target[H,P] in raw units. Dataset records are predicted with seed=0.
+        Explicit scoped records must provide context actions for exactly H
+        transitions; checking a prefix cannot establish full-horizon scope.
         Model metadata must have cumulative Task2 ``episode_lineage``; unknown
         exposure cannot be independently calibrated. Event-mask evidence is
         unrelated to this physical-only calibration.
@@ -178,6 +180,8 @@ class EmbodiedCalibration:
                     or predicted.shape != (len(model.members), samples, h, model.config.physical_dim)
                     or (horizon is not None and horizon != h)):
                 raise ValueError('Calibration requires matching bounded raw physical targets')
+            if scope is not None and context is not None and actions.shape != (h, model.config.action_dim):
+                raise ValueError('Scoped calibration actions must match the full prediction/target horizon')
             horizon = h
             member_means = predicted.mean(1)
             denominator = (scales if bound_mode == 'fixed_scale' else
