@@ -353,8 +353,15 @@ class TaskRuntime:
             before=self._observed
             binding={'task':self.graph.task_id,'node':node.node_id,'graph':self.graph.digest,
                      'skill':candidate.skill,'model':self.model_version,'calibration':self.calibration_hash}
+            prediction_binding=(diagnostics or {}).get('prediction_binding',{})
+            prediction_deadline=planned_at+self.config.planning_timeout_s
+            if prediction_binding:
+                prediction_deadline=min(prediction_deadline,prediction_binding.get('deadline',prediction_deadline))
+                binding['prediction_request_id']=prediction_binding['request_id']
+                binding['prediction_decision_id']=prediction_binding['decision_id']
+                binding['prediction_deadline']=prediction_deadline
             try:
-                grant=self.manager.authorize(before,actions,binding,time.monotonic()+self.config.planning_timeout_s)
+                grant=self.manager.authorize(before,actions,binding,prediction_deadline)
             except ObservationReceptionError as exc:
                 state.belief['context_valid']=False
                 self._terminate('fault_latched',f'authorization_observation_failed: {exc}')
@@ -362,7 +369,6 @@ class TaskRuntime:
             except ValueError as exc:
                 self._terminate('needs_review',f'authorization_rejected: {exc}')
                 return
-            prediction_binding=(diagnostics or {}).get('prediction_binding',{})
             self._emit('plan',{'decision_id':grant.decision_id,
                  **({'prediction_request_id':prediction_binding['request_id'],
                      'prediction_decision_id':prediction_binding['decision_id']} if prediction_binding else {}),
@@ -398,8 +404,13 @@ class TaskRuntime:
                 if mode=='reach' and verifier.last['matched'] and (node.hold_steps or repairing):
                     return 'reach_verified'
                 return None
+            def validate_dispatch():
+                if hasattr(self.predictor,'prepare_decision') and abs(
+                        float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                    raise ValueError('Simulation time changed before dispatch')
+                return self._versions_valid()
             result=self.manager.execute(grant,stop=self._cancel,on_step=on_step,
-                                        validate_binding=self._versions_valid)
+                                        validate_binding=validate_dispatch)
             count=result['executed']
             state.executed_cycles+=count
             entry['actions']+=count

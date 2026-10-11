@@ -1,5 +1,4 @@
 """Cancellable prediction only. This module never owns a robot or executor."""
-from collections import deque
 from dataclasses import dataclass, field
 import multiprocessing as mp
 import json
@@ -53,7 +52,7 @@ class BoundedInference:
             raise ValueError('Invalid startup timeout')
         self._guard, self._calls = threading.RLock(), threading.Lock()
         self.closed, self.faulted, self.generation = False, False, 0
-        self._seen = deque(maxlen=2048)
+        self._seen = set()
         self.process = self.connection = None
         self._start()
 
@@ -100,6 +99,8 @@ class BoundedInference:
                     raise RuntimeError('Prediction worker locked; explicit reset required')
                 if request.request_id in self._seen:
                     raise ValueError('Duplicate prediction request')
+                if len(self._seen)>=2048:
+                    raise RuntimeError('Prediction request session limit; explicit reset required')
                 generation, connection = self.generation, self.connection
             def exchange():
                 try:
@@ -127,7 +128,7 @@ class BoundedInference:
                 except (ValueError, TypeError, KeyError):
                     self.faulted = True; self._stop()
                     raise
-                self._seen.append(request.request_id)
+                self._seen.add(request.request_id)
                 return result
         finally:
             self._calls.release()

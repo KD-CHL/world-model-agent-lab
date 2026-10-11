@@ -1,7 +1,7 @@
 """Inference-only HTTP transport. Default loopback; no robot/execution route."""
 import argparse
 import base64
-from dataclasses import fields
+from dataclasses import fields, replace
 import hmac
 import http.client
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -124,6 +124,25 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass  # never log token, body, attacker-controlled headers or paths
 
+    def handle(self):
+        # An absolute connection boundary includes request-line/header parsing,
+        # unauthenticated idle clients and slow drip, not merely the body reads.
+        self.connection_deadline=time.monotonic()+self.server.max_timeout_s
+        def expire():
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        timer=threading.Timer(self.server.max_timeout_s,expire)
+        timer.daemon=True; timer.start()
+        try:
+            self.connection.settimeout(self.server.max_timeout_s)
+            super().handle()
+        except OSError:
+            self.close_connection=True
+        finally:
+            timer.cancel()
+
     def do_POST(self):
         if self.path != '/predict':
             self.send_error(404); return
@@ -138,7 +157,7 @@ class _Handler(BaseHTTPRequestHandler):
             length=int(raw_length)
             if length>server.max_body_bytes:
                 self.send_error(413); return
-            deadline=time.monotonic()+server.max_timeout_s
+            deadline=self.connection_deadline
             parts=[]; remaining=length
             while remaining:
                 budget=deadline-time.monotonic()
@@ -150,6 +169,11 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError('Incomplete body')
                 parts.append(part); remaining-=len(part)
             local,binding=receive_request(decode_packet(b''.join(parts),server.max_body_bytes),server.max_timeout_s)
+            # Decode/header/body time cannot replenish the inference deadline.
+            budget=min(local.timeout_s,deadline-time.monotonic())
+            if budget<=0:
+                raise TimeoutError('Connection prediction deadline')
+            local=replace(local,deadline=min(local.deadline,deadline),timeout_s=budget)
             result=server.worker.infer(local)
             result=dict(result); result.update(binding)
             body=encode_packet(result,server.max_response_bytes)

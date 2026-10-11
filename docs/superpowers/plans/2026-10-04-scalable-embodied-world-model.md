@@ -143,4 +143,4 @@ Tasks1–4逐任务子代理实现与独立审查；Task5子代理额度阻塞�
 - [x] Run focused tests; record RED, implement evaluator and wire CLI.
 - [x] Run full suite with ROS overlay, compileall and git diff --check; actual local GPU smoke collect/train/calibrate/evaluate and Agent smoke, inspect artifacts and frozen legacy identities. No long large-model training.
 - [x] Write accurate documentation/evidence and update plan checkboxes. Commit `docs: verify scalable world model training and G1 simulation`.
-- [ ] Whole-change independent review; repair important findings with regression tests, rerun full suite; retain feature branch, do not merge/push without new request.
+- [x] Final whole-change review: independent reviewer quota-interrupted before verdict; recorded fallback author self-review and one Important fix pass, RED/GREEN and412 fullROS tests. Independent approval not claimed; current user authorized feature-branch push, no main merge.

@@ -73,6 +73,10 @@ def select_candidates(predictor, observation, candidates, target, *, baseline,
                     score += float(np.linalg.norm(bounds[prefix-1]/scale))
         entry = {'candidate':index, 'skill':candidate.skill, 'trusted_prefix':prefix,
                  'score':score if prefix else None}
+        if getattr(predictor,'family',None)=='wmal.embodied_world.v1' and mean is not None:
+            entry.update(model_version=predictor.version, predicted_states=mean.tolist(),
+                         error_bounds=None if bounds is None else bounds.tolist(),
+                         world_model_diagnostics=diagnostics)
         if task_commands:
             if actions.ndim != 2 or actions.shape[1] != 2 or not np.isfinite(actions).all():
                 raise ValueError('Task joint ranking requires finite two-joint action deltas')

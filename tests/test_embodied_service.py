@@ -6,6 +6,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import time
+import socket
 import unittest
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -30,6 +31,47 @@ def request_for(model, timeout=5):
 
 
 class EmbodiedServiceTests(unittest.TestCase):
+    def test_incomplete_headers_cannot_block_next_client(self):
+        self._header_timeout(drip=False)
+
+    def test_slow_header_drip_obeys_absolute_server_deadline(self):
+        self._header_timeout(drip=True)
+
+    def _header_timeout(self, *, drip):
+        api = self.api()
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory)/'model.pt'
+            make_model(importlib.import_module('wmal.models.embodied_world')).save(checkpoint)
+            server = api.InferenceServer(('127.0.0.1',0), checkpoint, token='fixture-token', max_timeout_s=.1)
+            owner = threading.Thread(target=server.serve_forever, daemon=True); owner.start()
+            idle = socket.create_connection(server.server_address, timeout=1)
+            peer = None
+            stop = threading.Event(); sender = None
+            try:
+                idle.sendall(b'POST /predict HTTP/1.1\r\nHost: localhost\r\n')
+                if drip:
+                    def slow_headers():
+                        try:
+                            while not stop.wait(.025):
+                                idle.sendall(b'x')
+                        except OSError:
+                            pass
+                    sender = threading.Thread(target=slow_headers, daemon=True); sender.start()
+                time.sleep(.03)
+                peer = socket.create_connection(server.server_address, timeout=.6)
+                peer.sendall(b'POST /execute HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n')
+                try:
+                    response = peer.recv(4096)
+                except socket.timeout:
+                    self.fail('Unauthenticated incomplete headers held the sole service thread')
+                self.assertIn(b'404', response.split(b'\r\n')[0])
+            finally:
+                stop.set()
+                idle.close()
+                if sender is not None: sender.join(1)
+                if peer is not None: peer.close()
+                server.shutdown(); owner.join(1); server.server_close()
+
     def api(self):
         try:
             return importlib.import_module('wmal.models.embodied_service')

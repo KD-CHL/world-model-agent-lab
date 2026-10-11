@@ -166,6 +166,7 @@ python scripts/g1_task_agent.py \
 监控只读，模型没有执行权限。request绑定run/task/node/episode/step、真实历史ID和实测时间、candidate/skill、动作hash、controller/model/protocol。
 选中后另生成execution grant并链接prediction decision；dispatch前再次检查真实观测与仿真时间。每个执行端点都返回真实反馈，不能跳过中间观测。
 超时会终止自有推理worker并锁定，必须明确重置；不会后台继续规划、盲目重试或自动派发fallback。旧visual模型保持默认加载路径。
+原预测截止时间不会在授权时刷新，每个动作派发前都再次检查截止时间与最新实测仿真时钟。被拒候选也保留预测/误差界与绑定证据；本地/远程会话达到2048请求后明确要求reset，不淘汰旧ID后接受重放。
 
 可选独立进程服务（新终端仍用`wmal`，不占用户已有8765监控端口）：
 
@@ -180,6 +181,7 @@ Agent窗口命令添加`--inference-url http://127.0.0.1:8767/predict`，本地�
 服务仅有`/predict`，没有执行接口；非loopback绑定必须设置环境变量`WMAL_INFERENCE_TOKEN`且客户端使用经验证的HTTPS，TLS需由前置代理终止；服务本身不提供公网TLS。
 客户端只接受字面IP/localhost以避免无界DNS，跨主机deadline以剩余预算转换，原始客户端绑定必须回传。传输限制和过期/重复/reset响应都在暴露预测前检查。
 这不是公网生产部署指南；未测试真机、公网TLS或八卡推理吞吐。
+服务的绝对连接时限覆盖未认证的空闲请求、请求行/headers慢滴、body与推理；解析耗时不会补充推理预算。
 
 ## 评估解释
 
