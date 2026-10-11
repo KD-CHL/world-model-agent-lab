@@ -38,13 +38,19 @@ def select_candidates(predictor, observation, candidates, target, *, baseline,
                     evidence.append({'candidate':index,'skill':candidate.skill,'trusted_prefix':0,
                                      'score':None,'reason':'outside_calibration_scope'})
                     continue
-            if history is not None:
+            if hasattr(predictor, 'predict_candidate'):
+                inputs = history.inputs() if history is not None else (
+                    observation.rgb[None], observation.state[None], np.empty((0,len(actions[0]))))
+                result = predictor.predict_candidate(*inputs, actions.copy(),
+                    candidate_id=str(index), skill=candidate.skill)
+            elif history is not None:
                 result = predictor.predict_context(*history.inputs(), actions.copy())
             else:
                 result = predictor.predict(observation.rgb.copy(), observation.state.copy(), actions.copy())
             values, video = np.asarray(result['states']), np.asarray(result['frames'])
             if (result['model_version'] != predictor.version or values.ndim != 3
-                    or values.shape[1:] != (len(actions),len(target)) or len(values) < 2
+                    or values.shape[1:] != (len(actions),len(target))
+                    or len(values) < (1 if getattr(predictor,'family',None)=='wmal.embodied_world.v1' else 2)
                     or video.ndim != 5 or video.shape[:2] != values.shape[:2]
                     or video.shape[2:] != observation.rgb.shape
                     or not np.isfinite(values).all() or not np.isfinite(video).all()):

@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import time
+from uuid import uuid4
 import numpy as np
 from wmal.agents.task_graph import positive_int
 from wmal.agents.task_state import TaskState
@@ -91,6 +92,8 @@ class TaskRuntime:
         self._cancel=None
         self._residuals=[]
         self._frozen={}
+        self._prediction_run_id=str(self.artifact_dir.resolve()) if self.artifact_dir else str(uuid4())
+        self._observation_times={}
         previous=np.asarray(graph.start)
         # A0's complete nominal program is frozen before any execution.
         ordered=[]
@@ -198,6 +201,7 @@ class TaskRuntime:
         try:
             self._observed=self.session.observe()
             self.history.observe_current(self._observed)
+            self._observation_times[self._observed.step_id]=float(self.session.data.time)
         except (Exception,KeyboardInterrupt) as exc:
             self.session.abort('initial_observation_failed')
             self.state.belief['context_valid']=False
@@ -302,6 +306,18 @@ class TaskRuntime:
             state.replans+=1
             planned_at=time.monotonic()
             try:
+                if self.config.baseline in ('A2','A3') and hasattr(self.predictor,'prepare_decision'):
+                    from wmal.agents.embodied_provider import DecisionContext
+                    if abs(float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                        raise ValueError('Simulation time changed without a real context update')
+                    inputs=self.history.inputs() if self.context_steps else (
+                        self._observed.rgb[None],self._observed.state[None],np.empty((0,2)))
+                    ids=self.history.describe()['history_step_ids'] if self.context_steps else [self._observed.step_id]
+                    self.predictor.prepare_decision(DecisionContext(run_id=self._prediction_run_id,
+                        task_id=self.graph.task_id,node_id=node.node_id,episode_id=self._observed.episode_id,
+                        context_step_ids=tuple(ids),observation_times=tuple(self._observation_times[i] for i in ids),
+                        controller=deepcopy(self.controller_profile),deadline=planned_at+self.config.planning_timeout_s,
+                        rgb=inputs[0],state=inputs[1],past_actions=inputs[2]))
                 ranked,evidence=select_candidates(self.predictor,self._observed,candidates,np.tile(node.target,2),
                     baseline=self.config.baseline,calibration=self.calibration,error_budget=self.config.error_budget,
                     scale=self.scale,remaining=horizon,state_lower=np.concatenate([TARGET_LOW-.15,TARGET_LOW]),
@@ -309,8 +325,15 @@ class TaskRuntime:
                     history=self.history if self.context_steps else None,joint_target=np.asarray(node.target))
                 if not self._versions_valid():
                     raise ValueError('Model/semantics changed during prediction')
-            except (ValueError,RuntimeError,KeyError,TypeError) as exc:
-                self._terminate('needs_review',f'prediction_invalid: {exc}')
+                if hasattr(self.predictor,'prepare_decision') and abs(
+                        float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                    raise ValueError('Simulation time changed during prediction')
+            except (ValueError,RuntimeError,KeyError,TypeError,OSError) as exc:
+                faulted=isinstance(exc,OSError) or getattr(getattr(self.predictor,'transport',None),'faulted',False)
+                if faulted:
+                    self.session.abort('prediction_transport_failed')
+                    state.belief['context_valid']=False
+                self._terminate('fault_latched' if faulted else 'needs_review',f'prediction_invalid: {exc}')
                 return
             if time.monotonic()-planned_at>self.config.planning_timeout_s:
                 self._terminate('needs_review','planning_deadline')
@@ -339,7 +362,11 @@ class TaskRuntime:
             except ValueError as exc:
                 self._terminate('needs_review',f'authorization_rejected: {exc}')
                 return
-            self._emit('plan',{'decision_id':grant.decision_id,'skill':candidate.skill,'actions':actions.tolist(),
+            prediction_binding=(diagnostics or {}).get('prediction_binding',{})
+            self._emit('plan',{'decision_id':grant.decision_id,
+                 **({'prediction_request_id':prediction_binding['request_id'],
+                     'prediction_decision_id':prediction_binding['decision_id']} if prediction_binding else {}),
+                 'skill':candidate.skill,'actions':actions.tolist(),
                  'prefix_length':prefix,'model_version':self.model_version,'status':'execute',
                  'predicted_states':None if mean is None else mean.tolist(),
                  'error_bounds':None if bounds is None else bounds.tolist(),
@@ -351,6 +378,9 @@ class TaskRuntime:
             def on_step(observed,offset):
                 nonlocal mode
                 self._observed=observed
+                self._observation_times[observed.step_id]=float(self.session.data.time)
+                self._observation_times={key:value for key,value in self._observation_times.items()
+                    if key>=observed.step_id-max(1,self.context_steps)}
                 verified=verifier.update(observed,executed=True)
                 if mode=='reach' and node.hold_steps:
                     verifier.count=0  # reaching sample is not a zero-action hold
