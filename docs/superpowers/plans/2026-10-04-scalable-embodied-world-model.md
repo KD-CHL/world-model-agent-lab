@@ -34,7 +34,7 @@
 ## Execution and evidence
 
 用户明确要求计划完成后直接实现、不再等待确认；这覆盖本次规格/计划审批等待。
-采用逐任务子代理实现与独立审查，controller负责协调，不并发派发实现者。
+Tasks1–4逐任务子代理实现与独立审查；Task5子代理额度阻塞后按记录切换主代理inline执行，最终整分支审查另行核验。不并发派发实现者。
 基础环境：`/home/chl/miniconda3/envs/wmal/bin/python`。
 完整测试：激活wmal、`source scripts/setup_ros2.bash`后`python -m unittest discover -s tests -v`，`MUJOCO_GL=egl`。
 每任务测试需保存RED/GREEN证据和全部失败/skip；审查报告不等于实测。
@@ -53,11 +53,11 @@
 - `imagine_context(rgb, physical, commands, past_actions, actions, future_commands, *, view_mask=None, is_first=None, sample=True, seed=0) -> dict`; future_commands B,H,C precomputed by provider in correct coordinates. Output `physical` B,H,P residual-from-initial, `rgb` B,H,V,3,S,S, event_logits optional, logits/features/entropy for training. Future observations never accepted.
 - `parameter_report(config) -> dict` counts unique total/trainable and budget status on meta tensors without allocating large weights.
 
-- [ ] Write failing tests: `test_prior_changes_with_action_but_never_future_observation`, `test_reset_and_startup_context`, `test_sample_seed_does_not_mutate_global_rng`, `test_candidate_order_invariance`, `test_missing_view_mask_and_nan_rejected`, `test_gradients_and_balanced_kl`, `test_preset_real_parameter_budgets`.
-- [ ] Run `python -m unittest discover -s tests -p test_embodied_rssm.py -v`; expected missing model feature failure, record RED.
-- [ ] Implement multi-view shared CNN + per-state MLP + fusion, action embedding, grouped recurrent core, categorical posterior/prior with explicit per-call sampling, physics residual and full/residual RGB modes. Reuse symlog and KL primitives, not upstream code.
-- [ ] Run focused tests plus full suite; all pass, no unreported failure. Create precise preset counts/configs; old classes untouched.
-- [ ] Commit `feat: add scalable multimodal embodied RSSM family`; report dimensions/counts, red/green and global regression.
+- [x] Write failing tests: `test_prior_changes_with_action_but_never_future_observation`, `test_reset_and_startup_context`, `test_sample_seed_does_not_mutate_global_rng`, `test_candidate_order_invariance`, `test_missing_view_mask_and_nan_rejected`, `test_gradients_and_balanced_kl`, `test_preset_real_parameter_budgets`.
+- [x] Run `python -m unittest discover -s tests -p test_embodied_rssm.py -v`; expected missing model feature failure, record RED.
+- [x] Implement multi-view shared CNN + per-state MLP + fusion, action embedding, grouped recurrent core, categorical posterior/prior with explicit per-call sampling, physics residual and full/residual RGB modes. Reuse symlog and KL primitives, not upstream code.
+- [x] Run focused tests plus full suite; all pass, no unreported failure. Create precise preset counts/configs; old classes untouched.
+- [x] Commit `feat: add scalable multimodal embodied RSSM family`; report dimensions/counts, red/green and global regression.
 
 ### Task 2: Dataset profiles, aligned modality windows and provenance
 
@@ -70,11 +70,11 @@
 - `normalization()` fits training only for physical/command/action means/scales; `episode_window_indices` enables episode bootstrap and uniform episode sampling.
 - `write_embodied_manifest(path, episodes, profile, source)` and `validate_lineage(...)`: source IDs/hash cannot appear in multiple splits, paths stay inside root, modalities align; ancestor IDs/hashes stay excluded.
 
-- [ ] Write RED tests `test_hand_checked_action_alignment`, `test_padding_preserves_real_targets`, `test_multiview_episode_cannot_leak_splits`, `test_missing_and_misaligned_modalities`, `test_legacy_four_state_explicit_mapping`, `test_train_only_normalization_and_ancestor_hashes`.
-- [ ] Run focused unittest, expected unavailable interfaces; record RED.
-- [ ] Implement bounded lazy NPZ windows, explicit legacy adaptation and dataset validation; no future masks/images passed by inference adapter. Preserve timing and origin license metadata.
-- [ ] Focused + full suite; verify literal hand-derived physical/commands/action/time windows and hash rejection.
-- [ ] Commit `feat: add aligned embodied data profiles and provenance`.
+- [x] Write RED tests `test_hand_checked_action_alignment`, `test_padding_preserves_real_targets`, `test_multiview_episode_cannot_leak_splits`, `test_missing_and_misaligned_modalities`, `test_legacy_four_state_explicit_mapping`, `test_train_only_normalization_and_ancestor_hashes`.
+- [x] Run focused unittest, expected unavailable interfaces; record RED.
+- [x] Implement bounded lazy NPZ windows, explicit legacy adaptation and dataset validation; no future masks/images passed by inference adapter. Preserve timing and origin license metadata.
+- [x] Focused + full suite; verify literal hand-derived physical/commands/action/time windows and hash rejection.
+- [x] Commit `feat: add aligned embodied data profiles and provenance`.
 
 ### Task 3: Prediction provider, checkpoint identity and calibrated protocol
 
@@ -88,11 +88,11 @@
 - `EmbodiedCalibration.fit(records, model, *, alpha=.2, samples=8, mode='sample', scope=None)` uses episode-level simultaneous physical residual maximum over windows/dims/horizons, training-fixed scales, no commands. save/load/validate/bounds with model/protocol/controller/profile/scope binding. Calibration metadata records exact episode IDs/origin hashes; one member refuses ensemble-scaled mode.
 - `as_visual_predictor(calibration=None, samples=8)` legacy Agent adapter merges physical and exact command output, uses member mean over samples, first declared camera; diagnostics preserve raw sample uncertainty. Calibration adapter supplies physical bounds and zeros for known commands while correctly translating old normalized error budgets.
 
-- [ ] RED tests: `test_raw_increment_with_nonzero_normalization`, `test_single_member_and_no_fake_ensemble`, `test_future_targets_ignored`, `test_protocol_hash_and_checkpoint_roundtrip`, `test_event_labels_not_inferred`, `test_response_hash_reset_and_deadline_binding`, `test_joint_horizon_episode_calibration`, `test_ancestor_calibration_leak_and_profile_mismatch`.
-- [ ] Run focused unittest (both files); expected missing interfaces; record RED.
-- [ ] Implement trusted weights_only checkpoint export, content version including semantics/sampling, bounded validated request/response, independent calibration. Never silently load old calibration as new.
-- [ ] Focused + full suite; old model checksums/shape behavior preserved; adapter only supports declared G1-compatible mappings, others offline-only.
-- [ ] Commit `feat: add versioned embodied predictions and calibrated bounds`.
+- [x] RED tests: `test_raw_increment_with_nonzero_normalization`, `test_single_member_and_no_fake_ensemble`, `test_future_targets_ignored`, `test_protocol_hash_and_checkpoint_roundtrip`, `test_event_labels_not_inferred`, `test_response_hash_reset_and_deadline_binding`, `test_joint_horizon_episode_calibration`, `test_ancestor_calibration_leak_and_profile_mismatch`.
+- [x] Run focused unittest (both files); expected missing interfaces; record RED.
+- [x] Implement trusted weights_only checkpoint export, content version including semantics/sampling, bounded validated request/response, independent calibration. Never silently load old calibration as new.
+- [x] Focused + full suite; old model checksums/shape behavior preserved; adapter only supports declared G1-compatible mappings, others offline-only.
+- [x] Commit `feat: add versioned embodied predictions and calibrated bounds`.
 
 ### Task 4: Independent training, distributed execution and reproducible resume
 
@@ -106,11 +106,11 @@
 - Distributed setup honors torchrun LOCAL_RANK/RANK/WORLD_SIZE; CPU gloo for tests, CUDA NCCL for server. Validation de-duplicates IDs; last accumulation group divided by actual group length. DDP gradient synchronization correct; supported FSDP version-gated with explicit error, no silent fallback. Progress emitted rank0 only; failure propagates.
 - CLI `wmal-embodied-world {inspect,train,calibrate,evaluate,profile}`; consumes new or explicitly mapped legacy data, output must be new except explicit same-run resume. `profile` performs a real update/inference probe and reports actual peaks, throughput and budget; no server performance claims from dry-run.
 
-- [ ] RED tests `test_real_smoke_train_select_and_load`, `test_resume_matches_uninterrupted_step`, `test_resume_rejects_changed_data`, `test_finetune_freeze_and_lineage`, `test_dynamic_mask_is_not_rollout_input`, `test_tail_accumulation_correct`, `test_two_rank_cpu_unique_validation_and_checkpoint`, `test_cli_real_pipeline`.
-- [ ] Run focused unittest; record RED before implementations.
-- [ ] Implement loss/training/export/resume/CLI with existing progress and atomic JSON helpers; do not vendor Dreamer trainer or change legacy commands. Record real parameter counts and trainable split.
-- [ ] Focused + full suite, tiny real CPU/GPU training, CPU two-rank gloo; server CUDA8/FSDP performance remains unverified without hardware. Audit resume test against actual tensors and next RNG samples, not file presence.
-- [ ] Commit `feat: train and resume scalable embodied world models`.
+- [x] RED tests `test_real_smoke_train_select_and_load`, `test_resume_matches_uninterrupted_step`, `test_resume_rejects_changed_data`, `test_finetune_freeze_and_lineage`, `test_dynamic_mask_is_not_rollout_input`, `test_tail_accumulation_correct`, `test_two_rank_cpu_unique_validation_and_checkpoint`, `test_cli_real_pipeline`.
+- [x] Run focused unittest; record RED before implementations.
+- [x] Implement loss/training/export/resume/CLI with existing progress and atomic JSON helpers; do not vendor Dreamer trainer or change legacy commands. Record real parameter counts and trainable split.
+- [x] Focused + full suite, tiny real CPU/GPU training, CPU two-rank gloo; server CUDA8/FSDP performance remains unverified without hardware. Audit resume test against actual tensors and next RNG samples, not file presence.
+- [x] Commit `feat: train and resume scalable embodied world models`.
 
 ### Task 5: G1 Agent integration, bounded inference service and execution fencing
 
@@ -123,11 +123,11 @@
 - Revalidate physical/history/profile/episode/version before dispatch, reject stale/late/reset/duplicate responses. Reuse fixed TaskAgent feedback/accounting and fault lock; no skipped intermediate observation.
 - Preserve viewer/monitor continued session and quit lifecycle; waiting-time physics changes invalidate old predictions. Timeout doesn't execute an implicit fallback action.
 
-- [ ] RED tests `test_true_mujoco_adapter_trace`, `test_late_after_reset_never_dispatches`, `test_stuck_worker_terminated_and_locked`, `test_real_loopback_transport_binding_and_size_limit`, `test_no_auth_nonloopback_refused`, `test_repeated_task_and_quit_cleanup`.
-- [ ] Run focused unittest; record RED before adding family switch/service.
-- [ ] Implement explicit adapters and narrow inference-only service, forward monitor diagnostics including model/protocol/scope/raw errors. Keep old detector, gravity profile, budget and task graph unchanged.
-- [ ] Focused + full suite; actual MuJoCo steps, real local HTTP and worker timeout. No true-robot commands or public server launch.
-- [ ] Commit `feat: integrate embodied predictions with bounded G1 planning`.
+- [x] RED tests `test_true_mujoco_adapter_trace`, `test_late_after_reset_never_dispatches`, `test_stuck_worker_terminated_and_locked`, `test_real_loopback_transport_binding_and_size_limit`, `test_no_auth_nonloopback_refused`, `test_repeated_task_and_quit_cleanup`.
+- [x] Run focused unittest; record RED before adding family switch/service.
+- [x] Implement explicit adapters and narrow inference-only service, forward monitor diagnostics including model/protocol/scope/raw errors. Keep old detector, gravity profile, budget and task graph unchanged.
+- [x] Focused + full suite; actual MuJoCo steps, real local HTTP and worker timeout. No true-robot commands or public server launch.
+- [x] Commit `feat: integrate embodied predictions with bounded G1 planning`.
 
 ### Task 6: Reproducible evaluation, startup docs and final acceptance
 
@@ -139,8 +139,8 @@
 - Document inspect/collect/profile/train/resume/finetune/calibrate/evaluate/G1 persistent viewer commands using onlywmal; eight-card commands use torchrun actual supported configuration. No placeholder checkpoint marketed ready-to-run.
 - Acceptance evidence includes current regression counts, parameter meta counts, real local smoke pipeline and genuine MuJoCo protocol integration. Server tests or research gains not run explicitly marked unverified; negative outcomes retained.
 
-- [ ] RED `test_hand_computed_physical_metrics_exclude_commands`, `test_test_split_and_ancestry`, `test_coverage_width_and_persistence`, `test_evaluation_cli_writes_report`.
-- [ ] Run focused tests; record RED, implement evaluator and wire CLI.
-- [ ] Run full suite with ROS overlay, compileall and git diff --check; actual local GPU smoke collect/train/calibrate/evaluate and Agent smoke, inspect artifacts and frozen legacy identities. No long large-model training.
-- [ ] Write accurate documentation/evidence and update plan checkboxes. Commit `docs: verify scalable world model training and G1 simulation`.
+- [x] RED `test_hand_computed_physical_metrics_exclude_commands`, `test_test_split_and_ancestry`, `test_coverage_width_and_persistence`, `test_evaluation_cli_writes_report`.
+- [x] Run focused tests; record RED, implement evaluator and wire CLI.
+- [x] Run full suite with ROS overlay, compileall and git diff --check; actual local GPU smoke collect/train/calibrate/evaluate and Agent smoke, inspect artifacts and frozen legacy identities. No long large-model training.
+- [x] Write accurate documentation/evidence and update plan checkboxes. Commit `docs: verify scalable world model training and G1 simulation`.
 - [ ] Whole-change independent review; repair important findings with regression tests, rerun full suite; retain feature branch, do not merge/push without new request.

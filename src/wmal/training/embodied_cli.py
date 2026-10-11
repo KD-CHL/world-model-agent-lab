@@ -165,7 +165,7 @@ def profile_embodied(manifest, output, config):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Independent embodied world model training and probes')
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('inspect', 'train', 'calibrate', 'profile'):
+    for name in ('inspect', 'train', 'calibrate', 'profile', 'evaluate'):
         command = sub.add_parser(name)
         command.add_argument('--manifest', required=True)
         command.add_argument('--legacy-physical-indices')
@@ -185,18 +185,19 @@ def main(argv=None):
         if name == 'train':
             command.add_argument('--pretrained'); command.add_argument('--resume')
             command.add_argument('--no-progress', action='store_true')
-        if name == 'calibrate':
+        if name in ('calibrate', 'evaluate'):
             command.add_argument('--model', required=True)
             command.add_argument('--device', default='cpu')
+        if name == 'evaluate':
+            command.add_argument('--calibration')
+            command.add_argument('--horizon', type=int)
+        if name == 'calibrate':
             command.add_argument('--alpha', type=float, default=.2)
             command.add_argument('--samples', type=int, default=8)
             command.add_argument('--mode', choices=['sample', 'soft'], default='sample')
             command.add_argument('--scope', help='Raw-coordinate calibration scope JSON')
-    sub.add_parser('evaluate', help='Task6 owns independent evaluation; explicitly unavailable here')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'evaluate':
-            raise NotImplementedError('NotImplemented: independent evaluation is Task6')
         manifest = _manifest(args)
         if args.command == 'inspect':
             result = inspect_manifest(manifest)
@@ -205,6 +206,14 @@ def main(argv=None):
                                    resume=args.resume, show_progress=not args.no_progress)
         elif args.command == 'profile':
             result = profile_embodied(manifest, args.output, _config(args))
+        elif args.command == 'evaluate':
+            from .embodied_evaluation import evaluate_embodied
+            output = Path(args.output)
+            if output.exists():
+                raise ValueError('Evaluation output must be new')
+            result = evaluate_embodied(manifest, args.model, calibration=args.calibration,
+                                      horizon=args.horizon, device=args.device)
+            atomic_json(output, result)
         else:
             output = Path(args.output)
             if output.exists():

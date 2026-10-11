@@ -546,7 +546,7 @@ class EmbodiedTrainingTests(unittest.TestCase):
         self.assertEqual(profile['inference_samples'], 8)
         self.assertEqual(profile['optimizer_steps'], 1)
         self.assertEqual(profile['parameter_counts']['capacity_claim'], 'smoke only')
-        self.assertIn('NotImplemented', run('evaluate', success=False).stderr)
+        self.assertIn('required', run('evaluate', success=False).stderr)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,9 @@
 # World Model Agent Lab
 
+新增可规模化具身世界模型：独立 PyTorch categorical RSSM、多模态观测、实测物理量/已知指令分离、动作条件开放环训练、独立成员及原始轨迹级校准；接入有时限的本地/HTTP 推理和持续 G1 Agent 会话。只使用本项目 `wmal` 环境。
+完整采集、训练、续训、微调、评估和窗口启动命令见 [可规模化世界模型指南](docs/30_scalable_embodied_world.md)，实测结果见 [验收记录](docs/architecture/embodied-world-verification.md)。
+当前新模型短训未胜过简单动力学基线，A3 拒绝了不可信执行；约150M正式模型和8×3090仍待服务器实测，不宣称完整操作任务或论文效果已经完成。
+
 Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
