@@ -23,6 +23,7 @@ wmal-agent = "wmal.agents.cli:run_agent"
 wmal-serve = "wmal.agents.cli:serve"
 wmal-train-neural = "wmal.training.cli:train_neural_cli"
 wmal-visual-world = "wmal.training.visual_cli:main"
+wmal-embodied-world = "wmal.training.embodied_cli:main"
 wmal-monitor = "wmal.monitor.server:main"
 
 [tool.setuptools.packages.find]
