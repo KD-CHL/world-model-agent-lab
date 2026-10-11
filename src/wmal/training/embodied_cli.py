@@ -13,7 +13,7 @@ from wmal.datasets.embodied_sequences import EmbodiedDataset, from_visual_manife
 from wmal.logging.manifest import atomic_json
 from wmal.models.embodied_calibration import EmbodiedCalibration
 from wmal.models.embodied_config import ScalableConfig
-from wmal.models.embodied_rssm import ScalableRSSMMember
+from wmal.models.embodied_rssm import ScalableRSSMMember, parameter_report
 from wmal.models.embodied_world import EmbodiedWorldModel
 from .embodied_distributed import DistributedRuntime, optimizer_update
 from .embodied_checkpoint import deterministic_execution, environment_identity
@@ -86,6 +86,9 @@ def profile_embodied(manifest, output, config):
         runtime.rank_zero(new_output)
         data = EmbodiedDataset(manifest, 'train', horizon=config.sequence_length-1)
         config = resolve_config(config, data.profile)
+        capacity = parameter_report(config.model)
+        if config.model.preset != 'smoke' and not capacity['within_budget']:
+            raise ValueError('Formal network preset is outside its declared parameter budget')
         norm = data.normalization()
         torch.manual_seed(config.seed)
         sampler = EpisodeSampler(data, config, config.seed)

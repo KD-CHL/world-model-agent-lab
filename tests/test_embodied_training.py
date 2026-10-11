@@ -484,6 +484,40 @@ class EmbodiedTrainingTests(unittest.TestCase):
             self.assertTrue(torch.equal(rng, torch.rand(3, device='cuda')))
             self.assertTrue(all(value.dtype == torch.float32 for value in replay['model'].values()))
 
+    # A small explicit network must not produce a formal-capacity resource claim.
+    def test_cli_profile_rejects_false_formal_capacity_labels(self):
+        from dataclasses import asdict, replace
+        cfg = tiny_config(self.api(), epochs=1)
+        training = self.root / 'training.json'
+        training.write_text(json.dumps(asdict(replace(cfg, model=None))))
+        script = Path(__file__).resolve().parents[1] / 'scripts/embodied_world.py'
+        env = dict(os.environ, OMP_NUM_THREADS='1', MKL_NUM_THREADS='1')
+        env.pop('PYTHONPATH', None)
+        for preset in ('small', 'base', 'large'):
+            with self.subTest(preset=preset):
+                network = self.root / (preset + '.json')
+                network.write_text(json.dumps(asdict(replace(cfg.model, preset=preset))))
+                output = self.root / (preset + '-profile.json')
+                result = subprocess.run([sys.executable, str(script), 'profile',
+                    '--manifest', str(self.manifest), '--training-config', str(training),
+                    '--network-config', str(network), '--output', str(output)],
+                    capture_output=True, text=True, env=env, timeout=60)
+                self.assertNotEqual(result.returncode, 0, 'Undersized network published a formal capacity claim')
+                self.assertIn('parameter budget', result.stderr)
+                self.assertEqual(result.stdout, '')
+                self.assertFalse(output.exists())
+
+    # Moving the capacity gate after allocation must fail before any real weights exist.
+    def test_profile_checks_parameter_budget_before_real_model_allocation(self):
+        from dataclasses import replace
+        from wmal.training import embodied_cli as cli
+        cfg = tiny_config(self.api(), epochs=1)
+        cfg = replace(cfg, model=replace(cfg.model, preset='base'))
+        with patch.object(cli, 'ScalableRSSMMember',
+                          side_effect=AssertionError('Real model allocation preceded capacity validation')):
+            with self.assertRaisesRegex(ValueError, 'parameter budget'):
+                cli.profile_embodied(self.manifest, self.root / 'profile.json', cfg)
+
     def test_cli_real_pipeline(self):
         api = self.api(); cfg = tiny_config(api, epochs=1)
         from dataclasses import asdict
@@ -511,6 +545,7 @@ class EmbodiedTrainingTests(unittest.TestCase):
         self.assertGreater(profile['inference_seconds'], 0)
         self.assertEqual(profile['inference_samples'], 8)
         self.assertEqual(profile['optimizer_steps'], 1)
+        self.assertEqual(profile['parameter_counts']['capacity_claim'], 'smoke only')
         self.assertIn('NotImplemented', run('evaluate', success=False).stderr)
 
 
