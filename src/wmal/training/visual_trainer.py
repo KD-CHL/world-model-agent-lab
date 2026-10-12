@@ -1,5 +1,5 @@
 """Independent visual world-model training, fine-tuning and held-out evaluation."""
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import math
 import time
@@ -7,12 +7,52 @@ import time
 import numpy as np
 import torch
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Sampler, Subset
 
 from wmal.datasets.visual_sequences import VisualDataset, read_episode_lineage, assert_unexposed_episodes
 from wmal.logging.manifest import atomic_json, sha256_file
 from wmal.models.visual_latent import NetworkConfig, make_member, VisualWorldModel
 from wmal.training.progress import progress_bar, training_status, epoch_status
+
+
+def _average_ranks(values):
+    """Stable average ranks for Spearman metrics, including tied predictions."""
+    values=np.asarray(values)
+    order=np.argsort(values,kind='mergesort')
+    sorted_values=values[order]
+    ranks=np.empty(len(order),dtype=float)
+    start=0
+    while start<len(order):
+        end=start+1
+        while end<len(order) and sorted_values[end]==sorted_values[start]:
+            end+=1
+        ranks[order[start:end]]=(start+end-1)/2.
+        start=end
+    return ranks
+
+
+class EpisodeGroupedSampler(Sampler):
+    """Shuffle windows while keeping each episode locally cached during a pass."""
+    def __init__(self, episode_ids, seed):
+        self.episode_ids = tuple(int(value) for value in episode_ids)
+        self.seed = int(seed)
+        self.epoch = 0
+        self.groups = {}
+        for index, episode_id in enumerate(self.episode_ids):
+            self.groups.setdefault(episode_id, []).append(index)
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed + self.epoch)
+        self.epoch += 1
+        episodes = np.asarray(list(self.groups))
+        rng.shuffle(episodes)
+        for episode_id in episodes:
+            indices = np.asarray(self.groups[int(episode_id)], dtype=np.int64)
+            rng.shuffle(indices)
+            yield from indices.tolist()
+
+    def __len__(self):
+        return len(self.episode_ids)
 
 
 @dataclass(frozen=True)
@@ -43,6 +83,11 @@ class VisualTrainingConfig:
     free_nats: float = 1.
     reconstruction_weight: float = 1.
     context_steps: int = 0
+    object_weight: float = 1.0
+    object_observation_weight: float = 0.0
+    object_state_mode: str = 'absolute'
+    object_spatial_encoder: bool = False
+    window_stride: int = 1
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in (self.epochs,self.members,self.batch_size,
@@ -51,7 +96,12 @@ class VisualTrainingConfig:
                 or any(not math.isfinite(v) or v<0 for v in (self.learning_rate,self.weight_decay,
                    self.frame_weight,self.state_weight,self.latent_weight,self.event_weight,self.change_weight))
                 or self.learning_rate<=0 or not math.isfinite(self.gradient_clip) or self.gradient_clip<=0
-                or self.frame_weight<=0 or self.state_weight<=0):
+                or self.frame_weight<=0 or self.state_weight<=0
+                or any(not math.isfinite(v) or v<0 for v in
+                       (self.object_weight,self.object_observation_weight))
+                or self.object_state_mode not in ('absolute','residual')
+                or type(self.window_stride) is not int or self.window_stride<1
+                or type(self.object_spatial_encoder) is not bool):
             raise ValueError('Invalid visual training configuration')
         NetworkConfig(1,1,architecture=self.architecture,stoch=self.stoch,
                       classes=self.classes,unimix=self.unimix,context_steps=self.context_steps)
@@ -68,7 +118,7 @@ def batch_loss(member, batch, normalization, config):
     action=(action-norm['action_mean'])/norm['action_scale']
     if member.config.architecture=='categorical_rssm':
         from wmal.training.rssm_loss import rssm_loss
-        return rssm_loss(member,rgb,state,action,batch,config)
+        return rssm_loss(member,rgb,state,action,batch,config,norm)
     prediction=member.imagine(rgb[:,0],state[:,0],action)
     # Dynamic pixels are upweighted, but are targets only (not rollout inputs).
     weights=1.+config.change_weight*(rgb[:,1:]-rgb[:,:1]).abs().mean(2,keepdim=True)
@@ -81,9 +131,84 @@ def batch_loss(member, batch, normalization, config):
         mask=batch['event_mask'].to(device)
         loss=F.binary_cross_entropy_with_logits(prediction['event_logits'],batch['events'].to(device),reduction='none')
         event=(loss*mask).sum()/mask.sum().clamp_min(1.)
-    total=config.frame_weight*pixel+config.state_weight*state_loss+config.latent_weight*latent+config.event_weight*event
+    object_loss=torch.zeros((),device=device)
+    object_observation_loss=torch.zeros((),device=device)
+    if prediction.get('object_state') is not None:
+        if 'object_truth' not in batch or 'object_mean' not in norm or 'object_scale' not in norm:
+            raise ValueError('Object prediction requires future object truth and training normalization')
+        object_target=(batch['object_truth'].to(device)[:,1:]-norm['object_mean'])/norm['object_scale']
+        object_loss=F.mse_loss(prediction['object_state'],object_target)
+        if prediction.get('object_observation_state') is not None:
+            initial=(batch['object_truth'].to(device)[:,:1]-norm['object_mean'])/norm['object_scale']
+            object_observation_loss=F.mse_loss(prediction['object_observation_state'][:,None],initial)
+    total=(config.frame_weight*pixel+config.state_weight*state_loss+config.latent_weight*latent+
+           config.event_weight*event+config.object_weight*object_loss+
+           config.object_observation_weight*object_observation_loss)
     return total,{'frame':float(pixel.detach()),'state':float(state_loss.detach()),
-                  'latent':float(latent.detach()),'event':float(event.detach())}
+                  'latent':float(latent.detach()),'event':float(event.detach()),
+                  'object_state':float(object_loss.detach()),
+                  'object_observation':float(object_observation_loss.detach())}
+
+
+def _fine_tune_parent(parent, network, semantics, device):
+    """Validate a fine-tune parent, allowing named event channels to append."""
+    if len(parent.members)<2:
+        raise ValueError('Fine-tuning checkpoint has an invalid ensemble')
+    old_names=parent.semantics.get('event_names',[])
+    new_names=semantics.get('event_names',[])
+    if (not isinstance(old_names,list) or not isinstance(new_names,list)
+            or len(old_names)!=parent.config.event_dim or len(new_names)!=network.event_dim
+            or any(not isinstance(name,str) or not name for name in old_names+new_names)
+            or len(set(old_names))!=len(old_names) or len(set(new_names))!=len(new_names)):
+        raise ValueError('Fine-tuning event names do not match event dimensions')
+    old_core={key:value for key,value in parent.semantics.items() if key!='event_names'}
+    new_core={key:value for key,value in semantics.items() if key!='event_names'}
+    if old_core!=new_core:
+        raise ValueError('Fine-tuning architecture/control semantics do not match pretrained checkpoint')
+    if replace(parent.config,event_dim=network.event_dim)!=network:
+        raise ValueError('Fine-tuning architecture/control semantics do not match pretrained checkpoint')
+    if parent.config.event_dim>network.event_dim or new_names[:len(old_names)]!=old_names:
+        raise ValueError('Fine-tuning may only append named events to an otherwise identical checkpoint')
+
+    if network.event_dim==parent.config.event_dim:
+        members=parent.members
+    else:
+        event_keys={'event_head.weight','event_head.bias'}
+        members=[]
+        for previous in parent.members:
+            current=make_member(network).to(device)
+            old_state=previous.state_dict()
+            new_state=current.state_dict()
+            added=set(new_state)-set(old_state)
+            removed=set(old_state)-set(new_state)
+            expected_added=event_keys if parent.config.event_dim==0 else set()
+            if added!=expected_added or removed:
+                raise ValueError('Fine-tuning checkpoint layers differ beyond the event head')
+            with torch.no_grad():
+                for name,old_value in old_state.items():
+                    if name in event_keys:
+                        new_value=new_state[name]
+                        if (old_value.shape[0]!=parent.config.event_dim
+                                or new_value.shape[0]!=network.event_dim
+                                or old_value.shape[1:]!=new_value.shape[1:]):
+                            raise ValueError('Fine-tuning event head dimensions are inconsistent')
+                        new_value[:parent.config.event_dim].copy_(old_value)
+                    else:
+                        if new_state[name].shape!=old_value.shape:
+                            raise ValueError('Fine-tuning checkpoint layer dimensions do not match')
+                        new_state[name].copy_(old_value)
+            current.load_state_dict(new_state,strict=True)
+            members.append(current)
+
+    masks=parent.metadata.get('event_supervised_by_member')
+    if masks is None:
+        masks=[[False]*parent.config.event_dim for _ in parent.members]
+    if (not isinstance(masks,list) or len(masks)!=len(parent.members)
+            or any(not isinstance(row,list) or len(row)!=parent.config.event_dim
+                   or any(type(value) is not bool for value in row) for row in masks)):
+        raise ValueError('Fine-tuning checkpoint has invalid event supervision evidence')
+    event_masks=[row+[False]*(network.event_dim-parent.config.event_dim) for row in masks]
+    return members,event_masks
 
 
 def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrained=None, freeze_encoder=False,
@@ -100,6 +225,14 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     training_status(f'Checking training/validation dataset hashes: {Path(manifest).resolve()}',enabled=show_progress)
     train=VisualDataset(manifest,'train',horizon=config.horizon,context_steps=config.context_steps)
     validation=VisualDataset(manifest,'validation',horizon=config.horizon,context_steps=config.context_steps)
+    def sampled_indices(dataset):
+        terminal={i:row['steps']-config.horizon for i,row in enumerate(dataset.rows)}
+        return [index for index,(episode,offset) in enumerate(dataset.index)
+                if offset%config.window_stride==0 or offset==terminal[episode]]
+    training_indices=sampled_indices(train)
+    validation_indices=sampled_indices(validation)
+    if not training_indices or not validation_indices:
+        raise ValueError('Window stride removed all train or validation sequences')
     source=train.manifest['source']
     source_kind=source.get('kind','unknown') if isinstance(source,dict) else (
         source if isinstance(source,str) else 'unknown')
@@ -112,7 +245,10 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
                           image_size=semantics['image_size'],latent_dim=config.latent_dim,
                           hidden_dim=config.hidden_dim,event_dim=len(semantics.get('event_names',[])),
                           architecture=config.architecture,stoch=config.stoch,
-                          classes=config.classes,unimix=config.unimix,context_steps=config.context_steps)
+                          classes=config.classes,unimix=config.unimix,context_steps=config.context_steps,
+                          object_dim=len(semantics.get('object_state_order',[])),
+                          object_state_mode=config.object_state_mode,
+                          object_spatial_encoder=config.object_spatial_encoder)
     normalization=train.normalization()
     lineage={'schema':'wmal.episode_lineage.v1',
              'train':{'episode_ids':[],'sha256':[]},'selection':{'episode_ids':[],'sha256':[]}}
@@ -122,15 +258,13 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
         parent_event_masks=[[False]*network.event_dim for _ in members]
     else:
         parent=VisualWorldModel.load(pretrained,device=config.device)
-        if parent.config!=network or parent.semantics!=semantics or len(parent.members)!=config.members:
+        if len(parent.members)!=config.members:
             raise ValueError('Fine-tuning architecture/control semantics do not match pretrained checkpoint')
+        members,parent_event_masks=_fine_tune_parent(parent,network,semantics,config.device)
         lineage=read_episode_lineage(parent.metadata)
         assert_unexposed_episodes(validation.rows,[lineage['train']],context='Validation')
-        members=parent.members
         normalization=parent.normalization  # Freeze coordinates as well as learned backbone.
         parent_version=parent.version
-        parent_event_masks=parent.metadata.get('event_supervised_by_member',
-                                              [[False]*network.event_dim for _ in members])
     for kind,rows in (('train',train.rows),('selection',validation.rows)):
         for key in ('episode_ids','sha256'):
             field='episode_id' if key=='episode_ids' else 'sha256'
@@ -145,7 +279,11 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     optimizers=[torch.optim.AdamW([p for p in m.parameters() if p.requires_grad],
                                  lr=config.learning_rate,weight_decay=config.weight_decay) for m in members]
     # Resample independent EPISODES, preserving all within-episode windows.
-    by_episode={i:[j for j,(episode,_) in enumerate(train.index) if episode==i] for i in range(len(train.rows))}
+    by_episode={i:[] for i in range(len(train.rows))}
+    for j in training_indices:
+        by_episode[train.index[j][0]].append(j)
+    if any(not indices for indices in by_episode.values()):
+        raise ValueError('Window stride removed all sequences from a training episode')
     rng=np.random.default_rng(config.seed)
     loaders=[]
     event_masks=[]
@@ -160,9 +298,12 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
                 if by_episode[episode]:
                     event_supervised |= train._episode(episode)['event_mask'].astype(bool).any(0)
         event_masks.append(event_supervised.tolist())
-        loaders.append(DataLoader(Subset(train,indices),batch_size=config.batch_size,shuffle=True,
-                                  generator=torch.Generator().manual_seed(config.seed+i),num_workers=0))
-    val_loader=DataLoader(validation,batch_size=config.batch_size,shuffle=False,num_workers=0)
+        episode_ids=[train.index[j][0] for j in indices]
+        sampler=EpisodeGroupedSampler(episode_ids,config.seed+i)
+        loaders.append(DataLoader(Subset(train,indices),batch_size=config.batch_size,sampler=sampler,
+                                  num_workers=0))
+    val_loader=DataLoader(Subset(validation,validation_indices),batch_size=config.batch_size,
+                          shuffle=False,num_workers=0)
     output.mkdir(parents=True,exist_ok=True)
     metadata={'max_horizon':config.horizon,'dataset_manifest_sha256':sha256_file(manifest),
               'training_source':train.manifest['source'],
@@ -237,35 +378,127 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
     return report
 
 
-def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None):
-    from wmal.models.horizon_calibration import HorizonCalibration
+def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None,
+                    object_calibration=None, window_stride=1,split='test'):
+    from wmal.models.horizon_calibration import HorizonCalibration, ObjectHorizonCalibration
+    if split not in ('validation','calibration','test'):
+        raise ValueError('Evaluation split must be validation/calibration/test')
+    if split!='test' and (calibration is not None or object_calibration is not None):
+        raise ValueError('Final calibration artifacts may only be applied to test evaluation')
     model=VisualWorldModel.load(checkpoint,device=device)
-    dataset=VisualDataset(manifest,'test',horizon=horizon,context_steps=model.config.context_steps)
+    dataset=VisualDataset(manifest,split,horizon=horizon,context_steps=model.config.context_steps)
+    if type(window_stride) is not int or window_stride < 1:
+        raise ValueError('window_stride must be a positive integer')
     if dataset.semantics!=model.semantics:
         raise ValueError('Evaluation dataset/control semantics mismatch')
     lineage=read_episode_lineage(model.metadata)
-    assert_unexposed_episodes(dataset.rows,[lineage['train'],lineage['selection']],context='Evaluation')
+    evaluation_ids={row['episode_id'] for row in dataset.rows}
+    if split=='validation':
+        assert_unexposed_episodes(dataset.rows,[lineage['train']],context='Model selection evaluation')
+        if not evaluation_ids<=set(lineage['selection']['episode_ids']):
+            raise ValueError('Validation evaluation contains episodes outside the model-selection lineage')
+    else:
+        assert_unexposed_episodes(dataset.rows,[lineage['train'],lineage['selection']],context='Evaluation')
     bound_model=HorizonCalibration.load(calibration) if calibration else None
     if bound_model:
         bound_model.validate_for(model.version,model.semantics)
         if set(bound_model.episode_ids).intersection(r['episode_id'] for r in dataset.rows):
-            raise ValueError('Calibration overlaps test episodes')
+            raise ValueError('Calibration overlaps evaluation episodes')
+    object_bound_model=(ObjectHorizonCalibration.load(object_calibration) if object_calibration else None)
+    if object_bound_model:
+        object_bound_model.validate_for(model.version,model.semantics)
+        if set(object_bound_model.episode_ids).intersection(r['episode_id'] for r in dataset.rows):
+            raise ValueError('Object calibration overlaps evaluation episodes')
     frame,state,persist_frame,persist_state,sensitivity=[],[],[],[],[]
     frame_sensitivity,change_error,change_persistence=[],[],[]
+    event_brier,event_accuracy,event_persistence_brier=[],[],[]
+    event_uncertainty,event_actual_error=[],[]
+    object_error,object_persistence,object_error_dimensions,object_persistence_dimensions=[],[],[],[]
+    object_physical_error_dimensions,object_physical_persistence_dimensions=[],[]
+    object_quaternion_angle_errors={}
+    object_observation_errors,object_observation_physical_errors=[],[]
+    object_uncertainty,object_actual_error=[],[]
+    calibrated_width=[]
+    object_coverage,object_calibrated_width={},[]
+    object_group_coverage,object_group_calibrated_width={},{}
+    object_group_indices={}
+    for index,name in enumerate(model.semantics.get('object_state_order',[])):
+        group=':'.join(name.split(':')[:2])
+        object_group_indices.setdefault(group,[]).append(index)
+    event_names=[]
     coverage={}
-    for i in range(len(dataset)):
+    selected_indices=[]
+    offset=0
+    for row in dataset.rows:
+        count=row['steps']-horizon+1
+        selected_indices.extend(offset+i for i in range(0,count,window_stride))
+        offset+=count
+    for i in selected_indices:
         sample=dataset[i]
         predicted=model.predict_sample(sample)
         counter=model.predict_sample(sample,actions=np.zeros_like(sample['actions'][model.config.context_steps:]))
         # Keep context away from target metrics and persistence baselines.
         sample=dict(sample,rgb=sample['rgb'][model.config.context_steps:],
                     states=sample['states'][model.config.context_steps:])
+        if 'object_truth' in sample:
+            sample['object_truth']=sample['object_truth'][model.config.context_steps:]
         mean=predicted['states'].mean(0)
         frames=predicted['frames'].mean(0)
         frame.append(((frames-sample['rgb'][1:])**2).mean((1,2,3)))
         state.append(((mean-sample['states'][1:])**2).mean(-1))
         persist_frame.append(((sample['rgb'][:1]-sample['rgb'][1:])**2).mean((1,2,3)))
         persist_state.append(((sample['states'][:1]-sample['states'][1:])**2).mean(-1))
+        if predicted.get('object_states') is not None:
+            object_mean=predicted['object_states'].mean(0)
+            object_target=sample['object_truth'][1:]
+            object_scale=np.asarray(model.normalization['object_scale'])
+            normalized_error=(object_mean-object_target)/object_scale
+            normalized_persistence=(sample['object_truth'][:1]-object_target)/object_scale
+            object_error_dimensions.append(normalized_error**2)
+            object_persistence_dimensions.append(normalized_persistence**2)
+            object_physical_error_dimensions.append((object_mean-object_target)**2)
+            object_physical_persistence_dimensions.append((sample['object_truth'][:1]-object_target)**2)
+            if predicted.get('object_observations') is not None:
+                current_target=sample['object_truth'][0]
+                current_mean=predicted['object_observations'].mean(0)
+                object_observation_errors.append(((current_mean-current_target)/object_scale)**2)
+                object_observation_physical_errors.append((current_mean-current_target)**2)
+            quaternion_groups={}
+            for index,name in enumerate(model.semantics['object_state_order']):
+                parts=name.split(':')
+                if len(parts)==3 and parts[1]=='quaternion_wxyz':
+                    quaternion_groups.setdefault(parts[0],[]).append(index)
+            for obj,indices in quaternion_groups.items():
+                if len(indices)!=4:
+                    continue
+                predicted_q=object_mean[:,indices]
+                target_q=object_target[:,indices]
+                persistence_q=np.repeat(sample['object_truth'][:1,indices],len(object_target),axis=0)
+                predicted_q=predicted_q/np.maximum(np.linalg.norm(predicted_q,axis=-1,keepdims=True),1e-8)
+                target_q=target_q/np.maximum(np.linalg.norm(target_q,axis=-1,keepdims=True),1e-8)
+                persistence_q=persistence_q/np.maximum(np.linalg.norm(persistence_q,axis=-1,keepdims=True),1e-8)
+                predicted_angle=2*np.arccos(np.clip(np.abs((predicted_q*target_q).sum(-1)),0.,1.))
+                persistence_angle=2*np.arccos(np.clip(np.abs((persistence_q*target_q).sum(-1)),0.,1.))
+                object_quaternion_angle_errors.setdefault(obj,[]).append(
+                    (predicted_angle**2,persistence_angle**2))
+            object_error.append((normalized_error**2).mean(-1))
+            object_persistence.append((normalized_persistence**2).mean(-1))
+            object_uncertainty.append((predicted['object_states'].std(0)/object_scale).mean(-1))
+            object_actual_error.append((np.abs(object_mean-object_target)/object_scale).mean(-1))
+            if object_bound_model:
+                bounds=object_bound_model.bounds(predicted['object_states'].std(0),version=model.version,
+                                                 object_state_order=model.semantics['object_state_order'])
+                absolute_error=np.abs(object_mean-object_target)
+                covered=np.all(absolute_error<=bounds,axis=-1)
+                key=sample['episode_id']
+                object_coverage[key]=covered if key not in object_coverage else object_coverage[key]&covered
+                object_calibrated_width.append((bounds/object_scale[None,:]).mean(-1))
+                for group,indices in object_group_indices.items():
+                    group_covered=np.all(absolute_error[:,indices]<=bounds[:,indices],axis=-1)
+                    prior=object_group_coverage.setdefault(group,{})
+                    prior[key]=group_covered if key not in prior else prior[key]&group_covered
+                    object_group_calibrated_width.setdefault(group,[]).append(
+                        (bounds[:,indices]/object_scale[None,indices]).mean(-1))
         # Counterfactual sensitivity, not an assertion that zero-action targets are known.
         sensitivity.append(np.abs(mean-counter['states'].mean(0)).mean(-1))
         frame_sensitivity.append(np.abs(frames-counter['frames'].mean(0)).mean((1,2,3)))
@@ -274,13 +507,43 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         change_error.append((((frames-sample['rgb'][1:])**2)*changed).sum((1,2,3))/np.maximum(count,1))
         change_persistence.append((((sample['rgb'][:1]-sample['rgb'][1:])**2)*changed).sum((1,2,3))/np.maximum(count,1))
         if bound_model:
-            bounds=bound_model.bounds(predicted['states'].std(0),version=model.version)
+            state_std=predicted['states'].std(0)
+            bounds=bound_model.bounds(state_std,version=model.version)
             covered=np.all(np.abs(mean-sample['states'][1:])<=bounds,axis=-1)
             key=sample['episode_id']
             coverage[key]=covered if key not in coverage else coverage[key]&covered
-    report={'schema':'wmal.visual_evaluation.v1','split':'test','model_version':model.version,
+            calibrated_width.append((bounds/np.asarray(bound_model.state_scale)[None,:]).mean(-1))
+        if predicted.get('event_probabilities') is not None:
+            event_names=predicted.get('event_probability_names',event_names)
+            probabilities=predicted['event_probabilities'].mean(0)
+            targets=sample['events'][model.config.context_steps:]
+            if probabilities.shape != targets.shape:
+                raise ValueError('Event prediction dimensions do not match held-out labels')
+            event_brier.append(np.square(probabilities-targets))
+            event_accuracy.append(((probabilities>=.5)==(targets>=.5)).astype(float))
+            persistence=np.repeat(sample['events'][model.config.context_steps:model.config.context_steps+1],
+                                  len(probabilities),axis=0)
+            event_persistence_brier.append(np.square(persistence-targets))
+            event_uncertainty.append(predicted['event_probabilities'].std(0).mean(-1))
+            event_actual_error.append(np.abs(probabilities-targets).mean(-1))
+    event_metrics=None
+    if event_brier:
+        errors=np.concatenate(event_actual_error)
+        uncertainty=np.concatenate(event_uncertainty)
+        error_ranks,uncertainty_ranks=_average_ranks(errors),_average_ranks(uncertainty)
+        rank_correlation=(float(np.corrcoef(error_ranks,uncertainty_ranks)[0,1])
+                          if np.std(error_ranks)>0 and np.std(uncertainty_ranks)>0 else None)
+        event_metrics={
+            'event_names':event_names,
+            'brier_by_horizon':np.mean(event_brier,axis=(0,2)).tolist(),
+            'persistence_brier_by_horizon':np.mean(event_persistence_brier,axis=(0,2)).tolist(),
+            'accuracy_by_horizon':np.mean(event_accuracy,axis=(0,2)).tolist(),
+            'ensemble_spread_vs_absolute_error_spearman':rank_correlation,
+        }
+    report={'schema':'wmal.visual_evaluation.v1','split':split,'model_version':model.version,
             'context_steps':model.config.context_steps,
-            'manifest_sha256':sha256_file(manifest),'episodes':len(dataset.rows),'windows':len(dataset),
+            'manifest_sha256':sha256_file(manifest),'episodes':len(dataset.rows),
+            'windows':len(selected_indices),'window_stride_control_steps':window_stride,
             'frame_mse_by_horizon':np.mean(frame,0).tolist(),
             'state_rmse_by_horizon':np.sqrt(np.mean(state,0)).tolist(),
             'persistence_frame_mse_by_horizon':np.mean(persist_frame,0).tolist(),
@@ -289,5 +552,63 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
             'zero_action_frame_sensitivity_by_horizon':np.mean(frame_sensitivity,0).tolist(),
             'changed_region_frame_mse_by_horizon':np.mean(change_error,0).tolist(),
             'persistence_changed_region_frame_mse_by_horizon':np.mean(change_persistence,0).tolist(),
-            'episode_simultaneous_coverage_by_horizon':np.mean(list(coverage.values()),0).tolist() if coverage else None}
+            'episode_simultaneous_coverage_by_horizon':np.mean(list(coverage.values()),0).tolist() if coverage else None,
+            'calibrated_state_mean_half_width_by_horizon':np.mean(calibrated_width,0).tolist() if calibrated_width else None,
+            'event_prediction_metrics':event_metrics}
+    if object_error:
+        errors=np.concatenate(object_actual_error)
+        uncertainty=np.concatenate(object_uncertainty)
+        error_ranks,uncertainty_ranks=_average_ranks(errors),_average_ranks(uncertainty)
+        correlation=(float(np.corrcoef(error_ranks,uncertainty_ranks)[0,1])
+                     if np.std(error_ranks)>0 and np.std(uncertainty_ranks)>0 else None)
+        report['object_state_metrics']={
+            'state_order':model.semantics['object_state_order'],
+            'normalized_rmse_by_horizon':np.sqrt(np.mean(object_error,0)).tolist(),
+            'persistence_normalized_rmse_by_horizon':np.sqrt(np.mean(object_persistence,0)).tolist(),
+            'ensemble_spread_vs_absolute_error_spearman':correlation,
+            'episode_simultaneous_coverage_by_horizon':(
+                np.mean(list(object_coverage.values()),0).tolist() if object_coverage else None),
+            'calibrated_mean_half_width_by_horizon':(
+                np.mean(object_calibrated_width,0).tolist() if object_calibrated_width else None),
+            'calibrated_group_half_width_by_horizon':{
+                group:np.mean(widths,0).tolist() for group,widths in object_group_calibrated_width.items()},
+            'group_episode_simultaneous_coverage_by_horizon':{
+                group:np.mean(list(episodes.values()),0).tolist()
+                for group,episodes in object_group_coverage.items()},
+        }
+        errors_by_dimension=np.stack(object_error_dimensions,axis=0)
+        persistence_by_dimension=np.stack(object_persistence_dimensions,axis=0)
+        names=model.semantics['object_state_order']
+        groups={}
+        for index,name in enumerate(names):
+            parts=name.split(':')
+            group=':'.join(parts[:2])
+            groups.setdefault(group,[]).append(index)
+        report['object_state_metrics']['normalized_rmse_by_group']={
+            group:{'model':np.sqrt(errors_by_dimension[:,:,indices].mean((0,2))).tolist(),
+                   'persistence':np.sqrt(persistence_by_dimension[:,:,indices].mean((0,2))).tolist()}
+            for group,indices in groups.items()}
+        physical_errors=np.stack(object_physical_error_dimensions,axis=0)
+        physical_persistence=np.stack(object_physical_persistence_dimensions,axis=0)
+        report['object_state_metrics']['physical_rmse_by_group']={
+            group:np.sqrt(physical_errors[:,:,indices].mean((0,2))).tolist()
+            for group,indices in groups.items()}
+        report['object_state_metrics']['physical_persistence_rmse_by_group']={
+            group:np.sqrt(physical_persistence[:,:,indices].mean((0,2))).tolist()
+            for group,indices in groups.items()}
+        report['object_state_metrics']['quaternion_geodesic_rmse_deg_by_object']={
+            obj:{'model':np.rad2deg(np.sqrt(np.mean(np.stack([row[0] for row in values]),axis=0))).tolist(),
+                 'persistence':np.rad2deg(np.sqrt(np.mean(np.stack([row[1] for row in values]),axis=0))).tolist()}
+            for obj,values in object_quaternion_angle_errors.items()}
+        if object_observation_errors:
+            observation_error=np.stack(object_observation_errors,axis=0)
+            observation_physical=np.stack(object_observation_physical_errors,axis=0)
+            report['object_state_metrics']['current_image_localization']={
+                'normalized_rmse':float(np.sqrt(observation_error.mean())),
+                'normalized_rmse_by_group':{
+                    group:float(np.sqrt(observation_error[:,indices].mean()))
+                    for group,indices in groups.items()},
+                'physical_rmse_by_group':{
+                    group:float(np.sqrt(observation_physical[:,indices].mean()))
+                    for group,indices in groups.items()}}
     return report

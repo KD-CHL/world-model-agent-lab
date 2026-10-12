@@ -35,10 +35,12 @@ class CategoricalRSSMMember(nn.Module):
         super().__init__()
         self.config = config
         z, h = config.stoch * config.classes, config.hidden_dim
+        third_conv=(nn.Conv2d(32,32,3,1,1) if config.object_spatial_encoder
+                    else nn.Conv2d(32,32,4,2,1))
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 16, 4, 2, 1), nn.SiLU(),
             nn.Conv2d(16, 32, 4, 2, 1), nn.SiLU(),
-            nn.Conv2d(32, 32, 4, 2, 1), nn.SiLU(),
+            third_conv, nn.SiLU(),
             nn.AdaptiveAvgPool2d((4, 4)), nn.Flatten(),
             nn.Linear(512, config.latent_dim), nn.LayerNorm(config.latent_dim))
         self.state_encoder = nn.Sequential(nn.Linear(config.state_dim, config.latent_dim),
@@ -49,6 +51,12 @@ class CategoricalRSSMMember(nn.Module):
                                        nn.LayerNorm(h), nn.SiLU(), nn.Linear(h, z))
         self.state_head = nn.Sequential(nn.Linear(h + z, h), nn.SiLU(), nn.Linear(h, config.state_dim))
         self.event_head = nn.Linear(h + z, config.event_dim) if config.event_dim else None
+        self.object_head = (nn.Sequential(nn.Linear(h + z, h), nn.SiLU(),
+                                          nn.Linear(h, config.object_dim))
+                            if config.object_dim else None)
+        self.object_observation_head = (nn.Sequential(nn.Linear(h + z, h), nn.SiLU(),
+                                                      nn.Linear(h, config.object_dim))
+                                        if config.object_dim and config.object_state_mode=='residual' else None)
         self.decoder_input = nn.Linear(h + z, 32*4*4)
         layers, size, channels = [], 4, 32
         while size < config.image_size:
@@ -85,7 +93,10 @@ class CategoricalRSSMMember(nn.Module):
         frame = self.decoder(self.decoder_input(features).reshape(-1, 32, 4, 4))
         return {'rgb': frame.reshape(*shape, 3, self.config.image_size, self.config.image_size),
                 'state_symlog': self.state_head(features),
-                'event_logits': self.event_head(features) if self.event_head is not None else None}
+                'event_logits': self.event_head(features) if self.event_head is not None else None,
+                'object_state': self.object_head(features) if self.object_head is not None else None,
+                'object_observation_state': (self.object_observation_head(features)
+                                             if self.object_observation_head is not None else None)}
 
     def observe(self, rgb, states, actions, *, is_first=None, sample=False):
         """Observe T actual frames with T-1 intervening actions, no cross-reset carry.
@@ -145,6 +156,10 @@ class CategoricalRSSMMember(nn.Module):
             features.append(torch.cat([h, z], -1))
             entropy.append(self._entropy(logits))
         result = self._decode(torch.stack(features, 1))
+        if self.object_observation_head is not None:
+            base=start['object_observation_state'][:,-1:]
+            result['object_state']=base+result['object_state']
+            result['object_observation_state']=base[:,-1]
         result.update(state=symexp(result['state_symlog']),
                       prior_entropy=torch.stack(entropy, 1),
                       posterior_entropy=start['posterior_entropy'][:, -1])

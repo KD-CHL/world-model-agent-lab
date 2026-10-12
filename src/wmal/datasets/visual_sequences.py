@@ -66,7 +66,8 @@ def validate_arrays(rgb, states, actions, events=None, event_mask=None):
         raise ValueError('Invalid event targets/masks')
 
 
-def write_episode(path, rgb, states, actions, *, events=None, event_mask=None, overwrite=False):
+def write_episode(path, rgb, states, actions, *, events=None, event_mask=None,
+                  extra_arrays=None, overwrite=False):
     rgb, states, actions = np.asarray(rgb), np.asarray(states), np.asarray(actions)
     events = None if events is None else np.asarray(events)
     event_mask = None if event_mask is None else np.asarray(event_mask)
@@ -78,6 +79,15 @@ def write_episode(path, rgb, states, actions, *, events=None, event_mask=None, o
     arrays = {'rgb': rgb, 'states': states.astype('float32'), 'actions': actions.astype('float32')}
     if events is not None:
         arrays.update(events=events.astype('float32'), event_mask=event_mask.astype('float32'))
+    reserved = set(arrays)
+    for name, value in (extra_arrays or {}).items():
+        extra = np.asarray(value)
+        if (not isinstance(name, str) or not name or name in reserved or extra.dtype == object
+                or extra.ndim < 1 or len(extra) != len(states)):
+            raise ValueError('Extra arrays must have unique names and one row per state')
+        if np.issubdtype(extra.dtype, np.number) and not np.isfinite(extra).all():
+            raise ValueError('Extra arrays must contain only finite numeric values')
+        arrays[name] = extra
     with tempfile.NamedTemporaryFile(dir=path.parent, suffix='.npz', delete=False) as handle:
         temporary = Path(handle.name)
     try:
@@ -89,7 +99,8 @@ def write_episode(path, rgb, states, actions, *, events=None, event_mask=None, o
 
 
 def write_manifest(path, episodes, *, action_schema, action_order, state_order, camera,
-                   period_s, image_size, source, event_names=()):
+                   period_s, image_size, source, event_names=(), object_state_order=(),
+                   camera_fovy_deg=None):
     path = Path(path).resolve()
     rows = []
     for row in episodes:
@@ -99,14 +110,20 @@ def write_manifest(path, episodes, *, action_schema, action_order, state_order, 
                             arrays.get('events'), arrays.get('event_mask'))
             if (arrays['rgb'].shape[1] != image_size or arrays['states'].shape[1] != len(state_order)
                     or arrays['actions'].shape[1] != len(action_order)
-                    or len(event_names) != (arrays['events'].shape[1] if 'events' in arrays else 0)):
+                    or len(event_names) != (arrays['events'].shape[1] if 'events' in arrays else 0)
+                    or object_state_order and ('object_truth' not in arrays
+                        or arrays['object_truth'].ndim != 2
+                        or arrays['object_truth'].shape[1] != len(object_state_order))):
                 raise ValueError('Episode dimensions do not match manifest semantics')
             steps = len(arrays['actions'])
         rows.append({**row, 'sha256': sha256_file(file), 'steps': steps})
     payload = {'schema': SCHEMA, 'semantics': {'action_schema': action_schema,
                'action_order': list(action_order), 'state_order': list(state_order),
                'camera': camera, 'period_s': period_s, 'image_size': image_size,
-               'event_names': list(event_names)}, 'source': source, 'episodes': rows}
+               **({'camera_fovy_deg': float(camera_fovy_deg)} if camera_fovy_deg is not None else {}),
+               'event_names': list(event_names),
+               **({'object_state_order': list(object_state_order)} if object_state_order else {})},
+               'source': source, 'episodes': rows}
     _validate_manifest(payload)
     atomic_json(path, payload)
     return path
@@ -123,9 +140,18 @@ def _validate_manifest(payload):
         names = semantics[key]
         if not names or len(names) != len(set(names)) or any(not isinstance(n,str) or not n for n in names):
             raise ValueError('Vector order must be unique named dimensions')
+    if 'object_state_order' in semantics:
+        names = semantics['object_state_order']
+        if (not isinstance(names, list) or not names or len(names) != len(set(names))
+                or any(not isinstance(n, str) or not n for n in names)):
+            raise ValueError('Object state order must be unique named dimensions')
     if (not np.isfinite(semantics['period_s']) or semantics['period_s'] <= 0
             or semantics['image_size'] not in (32,64,128)):
         raise ValueError('Invalid period or image size')
+    if ('camera_fovy_deg' in semantics and
+            (not np.isfinite(semantics['camera_fovy_deg']) or
+             not 1.<=semantics['camera_fovy_deg']<179.)):
+        raise ValueError('Invalid camera field of view')
     ids, contents = set(), set()
     for row in payload['episodes']:
         if (row['split'] not in SPLITS or not isinstance(row['episode_id'], str)
@@ -172,6 +198,10 @@ class VisualDataset:
                     or arrays['actions'].shape[1]!=len(semantics['action_order'])
                     or arrays['rgb'].shape[1]!=semantics['image_size']):
                 raise ValueError('Manifest dimensions do not match episode')
+            if 'object_state_order' in semantics:
+                if ('object_truth' not in arrays or arrays['object_truth'].shape !=
+                        (row['steps']+1, len(semantics['object_state_order']))):
+                    raise ValueError('Object truth dimensions do not match manifest')
             self._cache[index] = arrays
             while len(self._cache)>2:
                 self._cache.popitem(last=False)
@@ -192,25 +222,36 @@ class VisualDataset:
         padding=k-length
         frames=arrays['rgb'][t-length:t+h+1]
         states=arrays['states'][t-length:t+h+1]
+        object_truth=(arrays.get('object_truth') if 'object_state_order' in self.semantics else None)
+        if object_truth is not None:
+            object_truth=object_truth[t-length:t+h+1]
         actions=arrays['actions'][t-length:t+h]
         if padding:
             frames=np.concatenate([np.repeat(frames[:1],padding,axis=0),frames])
             states=np.concatenate([np.repeat(states[:1],padding,axis=0),states])
+            if object_truth is not None:
+                object_truth=np.concatenate([np.repeat(object_truth[:1],padding,axis=0),object_truth])
             actions=np.concatenate([np.zeros((padding,actions.shape[1]),dtype=actions.dtype),actions])
         is_first=np.zeros(k+h+1,dtype=bool)
         is_first[:padding+1]=True
-        return {'rgb': np.transpose(frames,(0,3,1,2)).astype('float32')/255.,
+        result={'rgb': np.transpose(frames,(0,3,1,2)).astype('float32')/255.,
                 'states': states.astype('float32'),
                 'actions': actions.astype('float32'),
                 'events': events[t:t+h], 'event_mask': mask[t:t+h],
                 'is_first':is_first,'context_length':length,'prediction_offset':k,
                 'episode_id': self.rows[episode]['episode_id'], 'offset': t}
+        if object_truth is not None:
+            result['object_truth']=object_truth.astype('float32')
+        return result
 
     def normalization(self):
         if self.split != 'train':
             raise ValueError('Normalization must be fitted on training episodes only')
         result = {}
-        for name, key in [('state','states'),('action','actions')]:
+        fields=[('state','states'),('action','actions')]
+        if 'object_state_order' in self.semantics:
+            fields.append(('object','object_truth'))
+        for name, key in fields:
             # Streaming moments, bounded memory for real robot datasets.
             count, total, square = 0, None, None
             for i in range(len(self.rows)):

@@ -24,7 +24,9 @@ class VisualWorkcellSession:
         if image_size not in (32,64,128) or not np.isfinite(period_s) or period_s<=0 or period_s>1:
             raise ValueError('Invalid camera/control period')
         self.mj=mujoco
-        self.scene,self.model,self.data=build_workcell(task,seed)
+        # Preserve the original joint-servo training fixture. The manipulation
+        # experiment uses its separate reachable side-table layout.
+        self.scene,self.model,self.data=build_workcell(task,seed,layout_profile='legacy_visual')
         if camera not in self.scene.metadata()['cameras']:
             raise ValueError('Unknown workcell camera')
         self.image_size,self.camera,self.period_s=image_size,camera,period_s

@@ -29,16 +29,24 @@ class NetworkConfig:
     classes: int = 8
     unimix: float = .01
     context_steps: int = 0
+    object_dim: int = 0
+    object_state_mode: str = 'absolute'
+    object_spatial_encoder: bool = False
 
     def __post_init__(self):
         if (any(type(v) is not int or v<1 for v in
                 (self.state_dim,self.action_dim,self.latent_dim,self.hidden_dim))
-                or self.image_size not in (32,64,128) or type(self.event_dim) is not int or self.event_dim<0):
+                or self.image_size not in (32,64,128) or type(self.event_dim) is not int or self.event_dim<0
+                or type(self.object_dim) is not int or self.object_dim<0):
             raise ValueError('Invalid visual network dimensions')
         if (self.architecture not in ('deterministic','categorical_rssm')
                 or any(type(v) is not int or v<2 for v in (self.stoch,self.classes))
                 or not np.isfinite(self.unimix) or not 0<self.unimix<1):
             raise ValueError('Invalid RSSM architecture or categorical dimensions')
+        if self.object_state_mode not in ('absolute','residual'):
+            raise ValueError('Object state mode must be absolute or residual')
+        if type(self.object_spatial_encoder) is not bool:
+            raise ValueError('Object spatial encoder switch must be boolean')
         if (type(self.context_steps) is not int or self.context_steps < 0
                 or self.context_steps and self.architecture != 'categorical_rssm'):
             raise ValueError('Real history context requires a categorical RSSM and nonnegative integer steps')
@@ -49,9 +57,11 @@ class VisualLatentMember(nn.Module):
         super().__init__()
         self.config=config
         z,h=config.latent_dim,config.hidden_dim
+        third_conv=(nn.Conv2d(32,32,3,1,1) if config.object_spatial_encoder
+                    else nn.Conv2d(32,32,4,2,1))
         self.encoder=nn.Sequential(nn.Conv2d(3,16,4,2,1),nn.SiLU(),
                                   nn.Conv2d(16,32,4,2,1),nn.SiLU(),
-                                  nn.Conv2d(32,32,4,2,1),nn.SiLU(),
+                                  third_conv,nn.SiLU(),
                                   nn.AdaptiveAvgPool2d((4,4)),nn.Flatten(),
                                   nn.Linear(512,z),nn.LayerNorm(z))
         self.initial=nn.Sequential(nn.Linear(z+config.state_dim,h),nn.Tanh())
@@ -59,6 +69,11 @@ class VisualLatentMember(nn.Module):
         self.latent=nn.Sequential(nn.Linear(h,z),nn.LayerNorm(z))
         self.state_head=nn.Sequential(nn.Linear(h+z,h),nn.SiLU(),nn.Linear(h,config.state_dim))
         self.event_head=nn.Linear(h+z,config.event_dim) if config.event_dim else None
+        self.object_head=(nn.Sequential(nn.Linear(h+z,h),nn.SiLU(),nn.Linear(h,config.object_dim))
+                          if config.object_dim else None)
+        self.object_observation_head=(nn.Sequential(nn.Linear(z,h),nn.SiLU(),
+                                                    nn.Linear(h,config.object_dim))
+                                      if config.object_dim and config.object_state_mode=='residual' else None)
         self.decoder_input=nn.Linear(z+h,32*4*4)
         layers=[]
         size, channels=4,32
@@ -73,7 +88,9 @@ class VisualLatentMember(nn.Module):
     def imagine(self, rgb, state, actions):
         latent=self.encoder(rgb)
         hidden=self.initial(torch.cat([latent,state],-1))
-        frames, states, latents, events=[],[],[],[]
+        object_base=(self.object_observation_head(latent)
+                     if self.object_observation_head is not None else None)
+        frames, states, latents, events, objects=[],[],[],[],[]
         for action in actions.unbind(1):
             hidden=self.transition(torch.cat([latent,state,action],-1),hidden)
             latent=latent+.1*self.latent(hidden)
@@ -85,9 +102,14 @@ class VisualLatentMember(nn.Module):
             latents.append(latent)
             if self.event_head is not None:
                 events.append(self.event_head(features))
+            if self.object_head is not None:
+                value=self.object_head(features)
+                objects.append(value+object_base if object_base is not None else value)
         return {'rgb':torch.stack(frames,1),'state':torch.stack(states,1),
                 'latent':torch.stack(latents,1),
-                'event_logits':torch.stack(events,1) if events else None}
+                'event_logits':torch.stack(events,1) if events else None,
+                'object_state':torch.stack(objects,1) if objects else None,
+                'object_observation_state':object_base}
 
 
 def make_member(config):
@@ -101,6 +123,12 @@ def _version(config, semantics, normalization, states):
     configuration=asdict(config)
     if not config.context_steps:
         configuration.pop('context_steps')  # Preserve all pre-context checkpoint identities.
+    if not config.object_dim:
+        configuration.pop('object_dim')  # Preserve legacy checkpoints without object targets.
+    if config.object_state_mode=='absolute':
+        configuration.pop('object_state_mode')  # Preserve v3 absolute-head model identities.
+    if not config.object_spatial_encoder:
+        configuration.pop('object_spatial_encoder')
     if config.architecture=='deterministic':
         # v2 checksums predate these fields: don't invalidate existing calibration.
         for key in ('architecture','stoch','classes','unimix'):
@@ -125,6 +153,14 @@ class VisualWorldModel:
                 value=np.asarray(normalization[prefix+'_'+key])
                 if value.shape!=(width,) or not np.isfinite(value).all() or (key=='scale' and np.any(value<=0)):
                     raise ValueError('Invalid model normalization')
+        object_order=semantics.get('object_state_order',[])
+        if config.object_dim != len(object_order):
+            raise ValueError('Object target dimensions and named semantics mismatch')
+        if config.object_dim:
+            for key in ('mean','scale'):
+                value=np.asarray(normalization.get('object_'+key))
+                if value.shape!=(config.object_dim,) or not np.isfinite(value).all() or (key=='scale' and np.any(value<=0)):
+                    raise ValueError('Invalid object target normalization')
         self.config,self.semantics,self.normalization=config,dict(semantics),normalization
         self.members=[member.to(device).eval() for member in members]
         self.device,self.metadata=device,metadata or {}
@@ -170,7 +206,7 @@ class VisualWorldModel:
         normalized_past=(past_actions-np.asarray(norm['action_mean']))/np.asarray(norm['action_scale'])
         inputs=[torch.as_tensor(v,dtype=torch.float32,device=self.device)[None]
                 for v in (rgb,normalized_state,normalized_past,normalized_actions)]
-        states,frames,events,diagnostics=[],[],[],[]
+        states,frames,events,objects,object_observations,diagnostics=[],[],[],[],[],[]
         with torch.inference_mode():
             for member in self.members:
                 if self.config.architecture == 'categorical_rssm':
@@ -181,13 +217,20 @@ class VisualWorldModel:
                 frames.append(output['rgb'][0].cpu().numpy())
                 if output['event_logits'] is not None and self.event_supervised_channels.any():
                     events.append(output['event_logits'][0].sigmoid().cpu().numpy()[:,self.event_supervised_channels])
+                if output.get('object_state') is not None:
+                    objects.append(output['object_state'][0].cpu().numpy()*norm['object_scale']+norm['object_mean'])
+                if output.get('object_observation_state') is not None:
+                    object_observations.append(output['object_observation_state'][0].cpu().numpy()*
+                                               norm['object_scale']+norm['object_mean'])
                 if 'prior_entropy' in output:
                     diagnostics.append({'prior_entropy':output['prior_entropy'][0].cpu().tolist(),
                                         'posterior_entropy':float(output['posterior_entropy'][0])})
-        if not all(np.isfinite(v).all() for v in states+frames+events):
+        if not all(np.isfinite(v).all() for v in states+frames+events+objects+object_observations):
             raise RuntimeError('Nonfinite world-model prediction; refuse candidate')
         return {'model_version':self.version,'states':np.stack(states),'frames':np.stack(frames),
                 'event_probabilities':np.stack(events) if events else None,
+                'object_states':np.stack(objects) if objects else None,
+                'object_observations':np.stack(object_observations) if object_observations else None,
                 'event_probability_names':[name for name,enabled in
                     zip(self.semantics.get('event_names',[]),self.event_supervised_channels) if enabled],
                 'diagnostics':{'architecture':self.config.architecture,

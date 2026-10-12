@@ -33,20 +33,71 @@ def main(argv=None):
     train.add_argument('--device')
     train.add_argument('--epochs',type=int)
     train.add_argument('--no-progress',action='store_true',help='Disable terminal progress; JSON/report output remains')
-    for name in ('calibrate','evaluate'):
+    for name in ('calibrate','calibrate-object','evaluate'):
         command=sub.add_parser(name)
         command.add_argument('--manifest',required=True)
         command.add_argument('--checkpoint',required=True)
         command.add_argument('--output',required=True)
         command.add_argument('--horizon',type=int,default=4)
         command.add_argument('--device',default='cpu')
-        if name=='calibrate':
+        if name in ('calibrate','calibrate-object'):
             command.add_argument('--alpha',type=float,default=.2)
             command.add_argument('--std-floor',type=float,default=.05)
+            command.add_argument('--window-stride',type=int,default=32,
+                                 help='Calibrate on one window every N control steps per episode')
         else:
             command.add_argument('--calibration')
+            command.add_argument('--object-calibration')
+            command.add_argument('--split',choices=('validation','calibration','test'),default='test')
+            command.add_argument('--window-stride',type=int,default=1,
+                                 help='Evaluate one window every N control steps within each test episode')
+    fit_localizer=sub.add_parser('fit-stack-localizer')
+    fit_localizer.add_argument('--manifest',required=True)
+    fit_localizer.add_argument('--output',required=True)
+    fit_localizer.add_argument('--frame-stride',type=int,default=32)
+    fit_localizer.add_argument('--tabletop-only',action='store_true',
+                               help='Fit only stationary frames at the reset table height')
+    eval_localizer=sub.add_parser('evaluate-stack-localizer')
+    eval_localizer.add_argument('--manifest',required=True)
+    eval_localizer.add_argument('--localizer',required=True)
+    eval_localizer.add_argument('--output',required=True)
+    eval_localizer.add_argument('--split',choices=('validation','calibration','test'),default='validation')
+    eval_localizer.add_argument('--frame-stride',type=int,default=32)
+    eval_localizer.add_argument('--tabletop-only',action='store_true',
+                                help='Evaluate only stationary frames at the reset table height')
+    fit_rgb_xy=sub.add_parser('fit-rgb-xy-localizer')
+    fit_rgb_xy.add_argument('--manifest',required=True)
+    fit_rgb_xy.add_argument('--output',required=True,help='New or empty checkpoint directory')
+    fit_rgb_xy.add_argument('--epochs',type=int,default=20)
+    fit_rgb_xy.add_argument('--batch-size',type=int,default=128)
+    fit_rgb_xy.add_argument('--frame-stride',type=int,default=16)
+    fit_rgb_xy.add_argument('--max-samples-per-episode',type=int,default=32)
+    fit_rgb_xy.add_argument('--learning-rate',type=float,default=3e-4)
+    fit_rgb_xy.add_argument('--seed',type=int,default=2411)
+    fit_rgb_xy.add_argument('--device',default='cuda')
+    calibrate_rgb_xy=sub.add_parser('calibrate-rgb-xy-localizer')
+    calibrate_rgb_xy.add_argument('--manifest',required=True)
+    calibrate_rgb_xy.add_argument('--checkpoint',required=True)
+    calibrate_rgb_xy.add_argument('--output',required=True)
+    calibrate_rgb_xy.add_argument('--alpha',type=float,default=.2)
+    calibrate_rgb_xy.add_argument('--frame-stride',type=int,default=16)
+    calibrate_rgb_xy.add_argument('--max-samples-per-episode',type=int,default=32)
+    calibrate_rgb_xy.add_argument('--batch-size',type=int,default=128)
+    calibrate_rgb_xy.add_argument('--device',default='cuda')
+    eval_rgb_xy=sub.add_parser('evaluate-rgb-xy-localizer')
+    eval_rgb_xy.add_argument('--manifest',required=True)
+    eval_rgb_xy.add_argument('--checkpoint',required=True)
+    eval_rgb_xy.add_argument('--output',required=True)
+    eval_rgb_xy.add_argument('--split',choices=('validation','calibration','test'),default='validation')
+    eval_rgb_xy.add_argument('--frame-stride',type=int,default=16)
+    eval_rgb_xy.add_argument('--max-samples-per-episode',type=int,default=32)
+    eval_rgb_xy.add_argument('--batch-size',type=int,default=128)
+    eval_rgb_xy.add_argument('--device',default='cuda')
+    eval_rgb_xy.add_argument('--calibration',help='Frozen episode-level localizer radius JSON')
     args=parser.parse_args(argv)
-    if args.command in ('calibrate','evaluate'):
+    if args.command in ('calibrate','calibrate-object','evaluate',
+                        'fit-rgb-xy-localizer','calibrate-rgb-xy-localizer',
+                        'evaluate-rgb-xy-localizer'):
         import torch
         torch.set_num_threads(1)
     if args.command=='collect':
@@ -68,14 +119,51 @@ def main(argv=None):
                             pretrained=args.pretrained,freeze_encoder=args.freeze_encoder,
                             show_progress=not args.no_progress)
         result={key:report[key] for key in ('checkpoint','model_version','best_validation_loss','elapsed_s')}
+    elif args.command=='fit-stack-localizer':
+        from wmal.perception.stack_block_localizer import fit_stack_block_localizer
+        result=asdict(fit_stack_block_localizer(args.manifest,args.output,
+                                                 frame_stride=args.frame_stride,
+                                                 tabletop_only=args.tabletop_only))
+    elif args.command=='evaluate-stack-localizer':
+        from wmal.perception.stack_block_localizer import evaluate_stack_block_localizer
+        result=evaluate_stack_block_localizer(args.manifest,args.localizer,split=args.split,
+                                              frame_stride=args.frame_stride,
+                                              tabletop_only=args.tabletop_only)
+        atomic_json(args.output,result)
+    elif args.command=='fit-rgb-xy-localizer':
+        from wmal.perception.rgb_xy_regressor import train_rgb_xy_localizer
+        result=train_rgb_xy_localizer(args.manifest,args.output,epochs=args.epochs,
+            batch_size=args.batch_size,frame_stride=args.frame_stride,
+            max_samples_per_episode=args.max_samples_per_episode,
+            learning_rate=args.learning_rate,seed=args.seed,device=args.device)
+    elif args.command=='calibrate-rgb-xy-localizer':
+        from wmal.perception.rgb_xy_regressor import calibrate_rgb_xy_localizer
+        result=calibrate_rgb_xy_localizer(args.manifest,args.checkpoint,args.output,
+            alpha=args.alpha,frame_stride=args.frame_stride,
+            max_samples_per_episode=args.max_samples_per_episode,
+            batch_size=args.batch_size,device=args.device)
+    elif args.command=='evaluate-rgb-xy-localizer':
+        from wmal.perception.rgb_xy_regressor import evaluate_rgb_xy_localizer
+        result=evaluate_rgb_xy_localizer(args.manifest,args.checkpoint,args.output,
+            split=args.split,frame_stride=args.frame_stride,
+            max_samples_per_episode=args.max_samples_per_episode,
+            batch_size=args.batch_size,device=args.device,calibration_path=args.calibration)
     elif args.command=='calibrate':
         from wmal.models.horizon_calibration import calibrate_visual
         result=asdict(calibrate_visual(args.manifest,args.checkpoint,args.output,horizon=args.horizon,
-                  alpha=args.alpha,std_floor=args.std_floor,device=args.device))
+                  alpha=args.alpha,std_floor=args.std_floor,device=args.device,
+                  window_stride=args.window_stride))
+    elif args.command=='calibrate-object':
+        from wmal.models.horizon_calibration import calibrate_object_visual
+        result=asdict(calibrate_object_visual(args.manifest,args.checkpoint,args.output,horizon=args.horizon,
+                  alpha=args.alpha,std_floor=args.std_floor,device=args.device,
+                  window_stride=args.window_stride))
     else:
         from wmal.training.visual_trainer import evaluate_visual
         result=evaluate_visual(args.manifest,args.checkpoint,horizon=args.horizon,
-                               device=args.device,calibration=args.calibration)
+                               device=args.device,calibration=args.calibration,
+                               object_calibration=args.object_calibration,
+                               window_stride=args.window_stride,split=args.split)
         atomic_json(args.output,result)
     print(json.dumps(result,ensure_ascii=False,indent=2,allow_nan=False))
 

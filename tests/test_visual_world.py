@@ -70,6 +70,62 @@ class VisualDataTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('torch'),'Optional learning dependencies not installed')
 class VisualNetworkTests(unittest.TestCase):
+    def test_finetune_appends_named_event_channel_and_preserves_old_head_rows(self):
+        import torch
+        from wmal.datasets.visual_sequences import write_manifest
+        from wmal.training.visual_trainer import VisualTrainingConfig, train_visual
+        from wmal.models.visual_latent import VisualWorldModel
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            manifest=make_dataset(root)
+            payload=json.loads(manifest.read_text())
+            parent_events=['bilateral_grasp_contact','object_lifted','stable_stack']
+            for row in payload['episodes']:
+                path=root/row['path']
+                with np.load(path) as data:
+                    arrays={key:data[key] for key in data.files}
+                arrays['events']=np.zeros((8,3),dtype=np.float32)
+                arrays['event_mask']=np.ones((8,3),dtype=np.float32)
+                np.savez(path,**arrays)
+            semantics=dict(payload['semantics'])
+            semantics.pop('event_names',None)
+            write_manifest(manifest,payload['episodes'],**semantics,
+                           source=payload['source'],event_names=parent_events)
+            config=VisualTrainingConfig(epochs=1,members=2,batch_size=16,horizon=2,
+                                        latent_dim=16,hidden_dim=24,learning_rate=.001,weight_decay=0.)
+            train_visual(manifest,root/'parent',config)
+            parent=VisualWorldModel.load(root/'parent/best.pt')
+            parent_rows=[member.event_head.weight.detach().clone() for member in parent.members]
+
+            payload=json.loads(manifest.read_text())
+            next_events=parent_events+['object_dropped_after_lift']
+            for row in payload['episodes']:
+                path=root/row['path']
+                with np.load(path) as data:
+                    arrays={key:data[key] for key in data.files}
+                extra=np.zeros((8,1),dtype=np.float32)
+                extra_mask=np.zeros((8,1),dtype=np.float32)
+                if row['split']=='train':
+                    extra[:,0]=1.
+                    extra_mask[:,0]=1.
+                arrays['events']=np.concatenate((arrays['events'],extra),axis=1)
+                arrays['event_mask']=np.concatenate((np.zeros_like(arrays['event_mask']),extra_mask),axis=1)
+                np.savez(path,**arrays)
+            semantics=dict(payload['semantics'])
+            semantics.pop('event_names',None)
+            write_manifest(manifest,payload['episodes'],**semantics,
+                           source=payload['source'],event_names=next_events)
+
+            train_visual(manifest,root/'expanded',config,pretrained=root/'parent/best.pt')
+            expanded=VisualWorldModel.load(root/'expanded/best.pt')
+            self.assertEqual(expanded.semantics['event_names'],next_events)
+            self.assertEqual(expanded.metadata['event_supervised_channels'],[True,True,True,True])
+            for old_rows,member in zip(parent_rows,expanded.members):
+                torch.testing.assert_close(old_rows,member.event_head.weight[:3],rtol=0,atol=0)
+            prediction=expanded.predict(np.zeros((3,32,32)),np.zeros(2),np.zeros((2,2)))
+            self.assertEqual(prediction['event_probability_names'],next_events)
+            self.assertEqual(prediction['event_probabilities'].shape,(2,2,4))
+
     def test_finetune_retains_ancestor_exclusions_across_repartitioned_manifests(self):
         from wmal.training.visual_trainer import VisualTrainingConfig, train_visual, evaluate_visual
         from wmal.models.horizon_calibration import calibrate_visual
