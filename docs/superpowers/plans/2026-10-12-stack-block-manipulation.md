@@ -135,7 +135,7 @@ Before implementation, a MuJoCo Jacobian probe confirmed that the present forwar
 - [x] Build 20 ms synchronized 64x64 RGB/state/action/object-truth data with episode-disjoint train/validation/calibration/test splits; add one independent seed-106 failure episode to test only.
 - [x] Train and freeze `visual-23507a4e181f6f130653`, calibrate its horizon bounds, and evaluate against persistence on test episodes.
 - [x] Run the entire project test suite in one environment containing both MuJoCo and PyTorch. Windows run: 285 tests, 278 passed and 7 skipped; Git Bash was added to `PATH`, stdin polling is Windows-safe, and symlink assertions skip when the OS denies symlink creation.
-- [ ] Commit as `feat: add reproducible stack-block baseline runner`.
+- [x] Commit as `feat: add reproducible stack-block baseline runner` (`41ba3b9`).
 
 **M1 status:** The no-model stack-placement gate passes on the tested jitter family (79/80 across two held-out batches). The verifier is now v2 and records a distinct `object_dropped_after_lift` failure with configured thresholds; deterministic disturbed seed 7405 reproduced that report while successful seed 7402 emitted no drop event. The synthetic gripper and fixed-arm proxy remain explicit limitations; retreat is not accepted.
 
