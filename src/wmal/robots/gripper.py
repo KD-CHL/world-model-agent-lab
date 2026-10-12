@@ -81,6 +81,22 @@ class GripperCommandReceipt:
     requested_mode: str
     requested_opening_m: float
     accepted: bool
+    executed: bool = False
+    fault: str | None = None
+
+    def __post_init__(self):
+        if not isinstance(self.command_id, str) or not self.command_id or len(self.command_id) > 128:
+            raise ValueError('command_id must be a nonempty bounded string')
+        if self.requested_mode not in MuJoCoParallelGripper.MODES:
+            raise ValueError('Unknown gripper mode in receipt')
+        object.__setattr__(self, 'requested_opening_m',
+                           _finite_real(self.requested_opening_m, 'requested_opening_m'))
+        if type(self.accepted) is not bool or type(self.executed) is not bool:
+            raise ValueError('Gripper receipt state flags must be booleans')
+        if self.executed and not self.accepted:
+            raise ValueError('A gripper command cannot execute unless accepted')
+        if self.fault is not None and (not isinstance(self.fault, str) or not self.fault):
+            raise ValueError('fault must be a nonempty string or None')
 
 
 class MuJoCoParallelGripper:
@@ -133,9 +149,13 @@ class MuJoCoParallelGripper:
         self.mj.mj_forward(self.model, data)
         return self.observe(data)
 
-    def command(self, data, mode, *, opening_m, speed_m_s, force_limit_n):
+    def command(self, data, mode, *, opening_m, speed_m_s, force_limit_n, command_id=None):
         if mode not in self.MODES:
             raise ValueError('Unknown gripper mode')
+        if command_id is None:
+            command_id = str(uuid4())
+        if not isinstance(command_id, str) or not command_id or len(command_id) > 128:
+            raise ValueError('command_id must be a nonempty bounded string')
         requested = _finite_real(opening_m, 'opening_m')
         speed = _finite_real(speed_m_s, 'speed_m_s')
         force = _finite_real(force_limit_n, 'force_limit_n')
@@ -154,7 +174,7 @@ class MuJoCoParallelGripper:
         self._commanded_opening = self.observe(data).opening_m
         self._target_opening, self._speed = target, speed
         self._counter += 1
-        self._last_command_id = str(uuid4())
+        self._last_command_id = command_id
         for actuator_id in self.actuator_ids:
             self.model.actuator_forcerange[actuator_id] = [-force, force]
         return GripperCommandReceipt(self._last_command_id, mode, target, True)

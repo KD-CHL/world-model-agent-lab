@@ -1,5 +1,6 @@
 """Run the fixed no-world-model stack-block skill baseline."""
 import argparse
+from dataclasses import asdict
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -151,6 +152,9 @@ def run_episode(config, seed, run_dir, *, render=False, render_image_size=32,
                             'gripper_opening_m': receipt.gripper_opening_m,
                             'gripper_speed_m_s': receipt.gripper_speed_m_s,
                             'gripper_force_limit_n': receipt.gripper_force_limit_n,
+                            'gripper_command_receipt': (
+                                None if receipt.gripper_command_receipt is None else
+                                asdict(receipt.gripper_command_receipt)),
                             'final_observation': (receipt.observations[-1].to_agent_dict()
                                                   if receipt.observations else None),
                             'final_truth': {

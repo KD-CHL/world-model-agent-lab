@@ -64,5 +64,39 @@ class StackBlockBaselineTests(unittest.TestCase):
             path=Path(tmp)/'dup.json'; path.write_text(json.dumps(config))
             with self.assertRaises(ValueError): baseline.load_config(path)
 
+    def test_jsonl_action_trace_serializes_gripper_command_receipt(self):
+        from wmal.envs.manipulation_session import ActionCommand
+        from wmal.skills.manipulation_contracts import SkillRun
+
+        config=baseline.load_config(CONFIG)
+
+        def execute_one_gripper_action(skills, session, skill_command, budget, *,
+                                       cancel_event=None, timeout_s=None, verifier=None):
+            observation=session.observe()
+            joint_index=observation.joint_names.index('left_shoulder_pitch_joint')
+            action=ActionCommand(
+                episode_id=observation.episode_id,
+                expected_step_id=observation.step_id,
+                action_id='traceable-gripper-action',
+                joint_targets={'left_shoulder_pitch_joint':
+                               observation.joint_position[joint_index]},
+                duration_steps=1, gripper_mode='close')
+            receipt=session.execute(action)
+            return SkillRun(skill_command.name, 'failed', (receipt,),
+                            receipt.executed_steps, (), False,
+                            receipt.observations[-1], 'stop-after-one-step')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir=Path(tmp)/'run'; run_dir.mkdir()
+            with patch.object(baseline.StackBlockSkills, 'execute', execute_one_gripper_action):
+                baseline.run_episode(config, 0, run_dir)
+            event=json.loads((run_dir/'events.jsonl').read_text(encoding='utf-8'))
+            trace=event['action_trace'][0]
+            self.assertIn('gripper_command_receipt', trace)
+            self.assertEqual(trace['gripper_command_receipt']['command_id'],
+                             'traceable-gripper-action')
+            self.assertTrue(trace['gripper_command_receipt']['accepted'])
+            self.assertTrue(trace['gripper_command_receipt']['executed'])
+
 
 if __name__=='__main__': unittest.main()

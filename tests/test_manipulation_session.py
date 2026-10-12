@@ -69,6 +69,8 @@ class ManipulationSessionTests(unittest.TestCase):
     def test_execution_receipt_preserves_contiguous_steps_and_control_time(self):
         receipt = self.session.execute(self.action(duration_steps=2))
         self.assertEqual(receipt.executed_steps, 2)
+        self.assertTrue(hasattr(receipt, 'gripper_command_receipt'))
+        self.assertIsNone(receipt.gripper_command_receipt)
         self.assertEqual(receipt.start_step_id, 0)
         self.assertEqual(receipt.end_step_id, 2)
         self.assertAlmostEqual(receipt.sim_duration_s, .04, places=8)
@@ -77,6 +79,20 @@ class ManipulationSessionTests(unittest.TestCase):
         truth_trace = self.session.truth_trace_for_verifier(receipt)
         self.assertEqual([truth.step_id for truth in truth_trace], [1, 2])
         self.assertEqual(self.session.truth_for_verifier().step_id, 2)
+
+    def test_completed_gripper_action_receipt_is_bound_to_parent_action(self):
+        command = self.action(action_id='close-block-1', duration_steps=2,
+                              gripper_mode='close')
+        receipt = self.session.execute(command)
+        self.assertTrue(hasattr(receipt, 'gripper_command_receipt'))
+        gripper_receipt = receipt.gripper_command_receipt
+        self.assertEqual(gripper_receipt.command_id, 'close-block-1')
+        self.assertEqual(gripper_receipt.requested_mode, 'close')
+        self.assertAlmostEqual(gripper_receipt.requested_opening_m, .034, places=6)
+        self.assertTrue(gripper_receipt.accepted)
+        self.assertTrue(gripper_receipt.executed)
+        self.assertIsNone(gripper_receipt.fault)
+        self.assertEqual(receipt.executed_steps, 2)
 
     def test_duplicate_action_id_is_rejected_without_second_execution(self):
         command = self.action(duration_steps=1)
@@ -97,13 +113,18 @@ class ManipulationSessionTests(unittest.TestCase):
             raise RuntimeError('injected camera failure')
 
         self.session.observe = fail_after_physics_step
-        receipt = self.session.execute(self.action(duration_steps=3))
+        receipt = self.session.execute(self.action(duration_steps=3, gripper_mode='close'))
         self.assertTrue(receipt.interrupted)
         self.assertEqual(receipt.executed_steps, 2)
         self.assertEqual(receipt.end_step_id, 2)
         self.assertEqual(len(receipt.observations), 1)
         self.assertEqual(receipt.fault, 'post_action_observation_failed')
         self.assertEqual(self.session.fault_reason, 'post_action_observation_failed')
+        self.assertTrue(hasattr(receipt, 'gripper_command_receipt'))
+        self.assertTrue(receipt.gripper_command_receipt.accepted)
+        self.assertFalse(receipt.gripper_command_receipt.executed)
+        self.assertEqual(receipt.gripper_command_receipt.fault,
+                         'post_action_observation_failed')
         with self.assertRaises(RuntimeError):
             self.session.execute(self.action(action_id='must-not-retry'))
 

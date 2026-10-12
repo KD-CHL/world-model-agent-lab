@@ -1,5 +1,5 @@
 """Single-owner MuJoCo session for truth-separated stack-block experiments."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from math import isfinite
 from uuid import uuid4
@@ -7,7 +7,7 @@ from uuid import uuid4
 import numpy as np
 
 from wmal.envs.g1_locomotion import JOINT_NAMES
-from wmal.robots.gripper import GripperSpec, MuJoCoParallelGripper
+from wmal.robots.gripper import GripperCommandReceipt, GripperSpec, MuJoCoParallelGripper
 
 
 ACTION_SCHEMA = 'wmal.manipulation.action.v1'
@@ -178,6 +178,7 @@ class ExecutionReceipt:
     gripper_opening_m: float = .074
     gripper_speed_m_s: float = .04
     gripper_force_limit_n: float = 8.0
+    gripper_command_receipt: GripperCommandReceipt | None = None
 
 
 class ManipulationSession:
@@ -421,12 +422,14 @@ class ManipulationSession:
             lower, upper = self._joint_limits[name]
             if target < lower or target > upper:
                 raise ValueError(f'Joint target outside model limits: {name}')
+        gripper_command_receipt = None
         if command.gripper_mode is not None:
-            self._gripper.command(
+            gripper_command_receipt = self._gripper.command(
                 self._data, command.gripper_mode,
                 opening_m=command.gripper_opening_m,
                 speed_m_s=command.gripper_speed_m_s,
-                force_limit_n=command.gripper_force_limit_n)
+                force_limit_n=command.gripper_force_limit_n,
+                command_id=command.action_id)
         self._action_ids.add(command.action_id)
         start_step, start_time = self._step_id, float(self._data.time)
         observations, limits = [], []
@@ -461,6 +464,11 @@ class ManipulationSession:
                 self._fault_reason = 'post_action_observation_failed'
                 fault = self._fault_reason
                 break
+        if gripper_command_receipt is not None:
+            fully_executed = (self._step_id - start_step == command.duration_steps
+                              and fault is None)
+            gripper_command_receipt = replace(
+                gripper_command_receipt, executed=fully_executed, fault=fault)
         receipt = ExecutionReceipt(
             action_id=command.action_id, episode_id=self._episode_id,
             start_step_id=start_step, end_step_id=self._step_id,
@@ -472,7 +480,8 @@ class ManipulationSession:
             gripper_mode=command.gripper_mode,
             gripper_opening_m=command.gripper_opening_m,
             gripper_speed_m_s=command.gripper_speed_m_s,
-            gripper_force_limit_n=command.gripper_force_limit_n)
+            gripper_force_limit_n=command.gripper_force_limit_n,
+            gripper_command_receipt=gripper_command_receipt)
         self._trace.append(receipt)
         return receipt
 

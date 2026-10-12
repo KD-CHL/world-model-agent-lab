@@ -24,6 +24,9 @@ class ParallelGripperTests(unittest.TestCase):
         receipt = self.gripper.command(
             self.data, 'close', opening_m=0.0, speed_m_s=.02, force_limit_n=4.0)
         self.assertTrue(receipt.accepted)
+        self.assertTrue(hasattr(receipt, 'executed'))
+        self.assertFalse(receipt.executed)
+        self.assertIsNone(receipt.fault)
         self.assertEqual(receipt.requested_mode, 'close')
         for _ in range(20):
             self.gripper.advance(self.data, .02)
@@ -45,6 +48,13 @@ class ParallelGripperTests(unittest.TestCase):
         for _ in range(3):
             self.gripper.advance(self.data, .02)
         self.assertAlmostEqual(self.gripper.observe(self.data).target_opening_m, before, places=6)
+
+    def test_rejects_invalid_command_id_without_mutating_gripper_target(self):
+        before = self.gripper.observe(self.data)
+        with self.assertRaises(ValueError):
+            self.gripper.command(self.data, 'close', opening_m=0.0, speed_m_s=.02,
+                                 force_limit_n=4.0, command_id='')
+        self.assertEqual(self.gripper.observe(self.data), before)
 
     def test_rejects_unknown_mode_nonfinite_boolean_and_out_of_range_commands(self):
         bad_commands = (

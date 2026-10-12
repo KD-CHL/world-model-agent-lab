@@ -137,6 +137,24 @@ Before implementation, a MuJoCo Jacobian probe confirmed that the present forwar
 - [x] Run the entire project test suite in one environment containing both MuJoCo and PyTorch. Windows run: 285 tests, 278 passed and 7 skipped; Git Bash was added to `PATH`, stdin polling is Windows-safe, and symlink assertions skip when the OS denies symlink creation.
 - [x] Commit as `feat: add reproducible stack-block baseline runner` (`41ba3b9`).
 
+### Task 5: End-to-end auditable gripper command receipt
+
+**Files:**
+- Modify: `src/wmal/robots/gripper.py`
+- Modify: `src/wmal/envs/manipulation_session.py`
+- Modify: `scripts/stack_block_baseline.py`
+- Test: `tests/test_gripper.py`
+- Test: `tests/test_manipulation_session.py`
+- Test: `tests/test_stack_block_baseline.py`
+
+**Interface ruling:** `accepted` records that the bounded setpoint passed validation; `executed` is true only when the parent action completed its requested simulation control steps without interruption. Partial progress and its exact count remain authoritative in `ExecutionReceipt.executed_steps`; its `fault` is copied to the nested gripper receipt. The gripper command uses the parent `ActionCommand.action_id` so logged execution evidence has one traceable identity. A parent action with no gripper mode has no gripper receipt.
+
+- [x] Add tests for accepted-but-pending adapter receipts, parent action ID binding, completed and interrupted session receipts, and JSONL action-trace serialization.
+- [x] Implement receipt finalization in the session and include the nested receipt in baseline event logs.
+- [x] Run the focused tests, then the full project suite and `git diff --check`.
+- [x] Record the result in the experiment progress and SDD ledger.
+- [x] Commit the completed follow-up.
+
 **M1 status:** The no-model stack-placement gate passes on the tested jitter family (79/80 across two held-out batches). The verifier is now v2 and records a distinct `object_dropped_after_lift` failure with configured thresholds; deterministic disturbed seed 7405 reproduced that report while successful seed 7402 emitted no drop event. The synthetic gripper and fixed-arm proxy remain explicit limitations; retreat is not accepted.
 
 **M2 status:** Dataset, training, calibration, and evaluation paths run. v8's independent test and the v9 horizon-32 validation both fail the manipulated `block_0` pose gate; v9 event Brier improves only at longer horizons. Current recovery data contains retries but no successful retry recoveries, and state/object uncertainty is not useful enough for risk-sensitive control. New collections add a fourth `object_dropped_after_lift` event channel. Append-only event-head initialization is implemented and verified against the v8 checkpoint and a four-event manifest; the new channel remains untrained. Keep M2 open: collect with an approved, effective recovery behavior, select against manipulated-object validation metrics, and reserve a fresh final test before freezing the next checkpoint. Do not reuse the external collection's test split for v9 or its successors because it has already informed model iteration.
