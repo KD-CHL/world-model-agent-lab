@@ -296,7 +296,7 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
         if config.event_weight>0 and network.event_dim:
             for episode in set(map(int,episode_indices)):
                 if by_episode[episode]:
-                    event_supervised |= train._episode(episode)['event_mask'].astype(bool).any(0)
+                    event_supervised |= train.event_supervision_for_episode(episode)
         event_masks.append(event_supervised.tolist())
         episode_ids=[train.index[j][0] for j in indices]
         sampler=EpisodeGroupedSampler(episode_ids,config.seed+i)
@@ -516,13 +516,14 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         if predicted.get('event_probabilities') is not None:
             event_names=predicted.get('event_probability_names',event_names)
             probabilities=predicted['event_probabilities'].mean(0)
-            targets=sample['events'][model.config.context_steps:]
+            # Dataset event arrays already contain only the future horizon;
+            # context frames/actions are carried separately in RGB/state/action.
+            targets=sample['events']
             if probabilities.shape != targets.shape:
                 raise ValueError('Event prediction dimensions do not match held-out labels')
             event_brier.append(np.square(probabilities-targets))
             event_accuracy.append(((probabilities>=.5)==(targets>=.5)).astype(float))
-            persistence=np.repeat(sample['events'][model.config.context_steps:model.config.context_steps+1],
-                                  len(probabilities),axis=0)
+            persistence=np.repeat(sample['events'][:1],len(probabilities),axis=0)
             event_persistence_brier.append(np.square(persistence-targets))
             event_uncertainty.append(predicted['event_probabilities'].std(0).mean(-1))
             event_actual_error.append(np.abs(probabilities-targets).mean(-1))

@@ -47,6 +47,54 @@ class VisualDataTests(unittest.TestCase):
                      states=np.ones((9,2))*1000, actions=np.ones((8,2))*1000)
             np.testing.assert_array_equal(dataset.normalization()['state_mean'], norm['state_mean'])
 
+    def test_normalization_does_not_decompress_rgb_frames(self):
+        from unittest.mock import patch
+        from wmal.datasets.visual_sequences import VisualDataset
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = VisualDataset(make_dataset(Path(tmp)), 'train', horizon=3)
+            original = np.lib.npyio.NpzFile.__getitem__
+
+            def reject_rgb(archive, key):
+                if key == 'rgb':
+                    raise AssertionError('normalization decompressed RGB frames')
+                return original(archive, key)
+
+            with patch.object(np.lib.npyio.NpzFile, '__getitem__', reject_rgb):
+                stats = dataset.normalization()
+            self.assertEqual(set(stats), {'state_mean', 'state_scale', 'action_mean', 'action_scale'})
+
+    def test_event_supervision_profile_reads_only_event_mask(self):
+        from unittest.mock import patch
+        from wmal.datasets.visual_sequences import VisualDataset, write_episode, write_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = make_dataset(root)
+            payload = json.loads(manifest.read_text())
+            for row in payload['episodes']:
+                path = root / row['path']
+                with np.load(path, allow_pickle=False) as arrays:
+                    rgb, states, actions = (arrays['rgb'].copy(), arrays['states'].copy(),
+                                            arrays['actions'].copy())
+                events = np.zeros((8, 1), dtype=np.float32)
+                event_mask = np.ones_like(events)
+                write_episode(path, rgb, states, actions, events=events,
+                              event_mask=event_mask, overwrite=True)
+            semantics = dict(payload['semantics'])
+            semantics.pop('event_names', None)
+            write_manifest(manifest, payload['episodes'], source=payload['source'],
+                           event_names=['seen'], **semantics)
+            dataset = VisualDataset(manifest, 'train', horizon=3)
+            original = np.lib.npyio.NpzFile.__getitem__
+
+            def reject_rgb(archive, key):
+                if key == 'rgb':
+                    raise AssertionError('event supervision scan decompressed RGB frames')
+                return original(archive, key)
+
+            with patch.object(np.lib.npyio.NpzFile, '__getitem__', reject_rgb):
+                mask = dataset.event_supervision_for_episode(0)
+            np.testing.assert_array_equal(mask, [True])
+
     def test_duplicate_episode_or_content_and_wrong_alignment_are_rejected(self):
         from wmal.datasets.visual_sequences import VisualDataset, write_episode
         with tempfile.TemporaryDirectory() as tmp:

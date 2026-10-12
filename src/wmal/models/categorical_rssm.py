@@ -114,6 +114,11 @@ class CategoricalRSSMMember(nn.Module):
             is_first[:, 0] = True
         if is_first.shape != (b, t) or is_first.dtype != torch.bool:
             raise ValueError('is_first must be a boolean [B,T] episode reset mask')
+        # Image and state encoders are sample-local (convolutions and LayerNorm,
+        # with no batch-coupled layers), so encode the aligned real sequence in
+        # one batch. Keep only the recurrent RSSM update inside the time loop.
+        tokens = self._token(rgb.reshape(b*t, *rgb.shape[2:]),
+                             states.reshape(b*t, states.shape[-1])).reshape(b, t, -1)
         h, z = self._initial(states[:, 0])
         features, priors, posts = [], [], []
         for i in range(t):
@@ -124,7 +129,7 @@ class CategoricalRSSMMember(nn.Module):
             incoming = incoming.masked_fill(reset, 0.)
             h = self.transition(torch.cat([z, incoming], -1), h)
             prior = self._logits(self.prior, h)
-            post = self._logits(self.posterior, torch.cat([h, self._token(rgb[:, i], states[:, i])], -1))
+            post = self._logits(self.posterior, torch.cat([h, tokens[:, i]], -1))
             z = self._latent(post, sample)
             features.append(torch.cat([h, z], -1))
             priors.append(prior)

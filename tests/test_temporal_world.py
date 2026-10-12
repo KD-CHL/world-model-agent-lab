@@ -26,6 +26,23 @@ def model(context_steps=2):
 
 
 class TemporalWorldTests(unittest.TestCase):
+    def test_rssm_encodes_real_context_as_one_batched_sequence(self):
+        predictor = model()
+        member = predictor.members[0]
+        rgb_calls, state_calls = [], []
+        rgb_hook = member.encoder.register_forward_hook(
+            lambda _module, inputs, _output: rgb_calls.append(tuple(inputs[0].shape)))
+        state_hook = member.state_encoder.register_forward_hook(
+            lambda _module, inputs, _output: state_calls.append(tuple(inputs[0].shape)))
+        try:
+            member.observe(torch.rand(2, 5, 3, 32, 32), torch.rand(2, 5, 2),
+                           torch.rand(2, 4, 2), sample=False)
+        finally:
+            rgb_hook.remove()
+            state_hook.remove()
+        self.assertEqual(rgb_calls, [(10, 3, 32, 32)])
+        self.assertEqual(state_calls, [(10, 2)])
+
     def test_history_changes_prediction_without_candidate_branch_side_effects(self):
         predictor = model()
         rgb = np.zeros((3, 3, 32, 32), dtype='float32')
@@ -144,6 +161,36 @@ class TemporalWorldTests(unittest.TestCase):
 
 
 class TemporalTrainingTests(unittest.TestCase):
+    def test_context_evaluation_keeps_event_targets_aligned_to_prediction_horizon(self):
+        import json
+        from wmal.datasets.visual_sequences import write_episode, write_manifest
+        from wmal.training.visual_trainer import VisualTrainingConfig, train_visual, evaluate_visual
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = make_dataset(root)
+            payload = json.loads(manifest.read_text())
+            for row in payload['episodes']:
+                path = root / row['path']
+                with np.load(path, allow_pickle=False) as arrays:
+                    rgb, states, actions = (arrays['rgb'].copy(), arrays['states'].copy(),
+                                            arrays['actions'].copy())
+                events = np.zeros((8, 1), dtype=np.float32)
+                events[3, 0] = 1.
+                write_episode(path, rgb, states, actions,
+                              events=events, event_mask=np.ones_like(events), overwrite=True)
+            semantics = dict(payload['semantics'])
+            semantics.pop('event_names', None)
+            write_manifest(manifest, payload['episodes'], source=payload['source'],
+                           event_names=['stacked'], **semantics)
+            config = VisualTrainingConfig(epochs=1, members=2, batch_size=16, horizon=2,
+                                          latent_dim=16, hidden_dim=24, architecture='categorical_rssm',
+                                          context_steps=2, event_weight=.2)
+            train_visual(manifest, root/'trained', config)
+            report = evaluate_visual(manifest, root/'trained/best.pt', horizon=2,
+                                     window_stride=2, split='validation')
+            self.assertEqual(report['event_prediction_metrics']['event_names'], ['stacked'])
+            self.assertEqual(len(report['event_prediction_metrics']['brier_by_horizon']), 2)
+
     def test_context_train_finetune_calibrate_and_evaluate_use_identical_protocol(self):
         from wmal.training.visual_trainer import VisualTrainingConfig, train_visual, evaluate_visual
         from wmal.models.horizon_calibration import calibrate_visual

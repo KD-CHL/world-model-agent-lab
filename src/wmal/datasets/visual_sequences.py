@@ -208,6 +208,24 @@ class VisualDataset:
         self._cache.move_to_end(index)
         return self._cache[index]
 
+    def event_supervision_for_episode(self, index):
+        """Return supervised channels without loading RGB/state episode arrays."""
+        if type(index) is not int or not 0 <= index < len(self.rows):
+            raise IndexError('Episode index out of range')
+        names=self.semantics.get('event_names',[])
+        if not names:
+            return np.zeros(0,dtype=bool)
+        row=self.rows[index]
+        path=(self.path.parent/row['path']).resolve()
+        with np.load(path,allow_pickle=False) as arrays:
+            if 'event_mask' not in arrays.files:
+                raise ValueError('Event semantics require an event mask in every episode')
+            mask=arrays['event_mask']
+        if (mask.shape!=(row['steps'],len(names)) or not np.isfinite(mask).all()
+                or np.any((mask!=0)&(mask!=1))):
+            raise ValueError('Event supervision mask does not match episode semantics')
+        return mask.astype(bool).any(0)
+
     def __len__(self):
         return len(self.index)
 
@@ -247,21 +265,35 @@ class VisualDataset:
     def normalization(self):
         if self.split != 'train':
             raise ValueError('Normalization must be fitted on training episodes only')
-        result = {}
         fields=[('state','states'),('action','actions')]
         if 'object_state_order' in self.semantics:
             fields.append(('object','object_truth'))
-        for name, key in fields:
-            # Streaming moments, bounded memory for real robot datasets.
-            count, total, square = 0, None, None
-            for i in range(len(self.rows)):
-                values = self._episode(i)[key].astype('float64')
-                count += len(values)
-                total = values.sum(0) if total is None else total+values.sum(0)
-                square = (values*values).sum(0) if square is None else square+(values*values).sum(0)
-            mean = total/count
-            scale = np.sqrt(np.maximum(square/count-mean*mean,0.)).clip(.01)
-            result[name+'_mean'], result[name+'_scale'] = mean.tolist(), scale.tolist()
+        counts={name:0 for name,_ in fields}
+        totals={name:None for name,_ in fields}
+        squares={name:None for name,_ in fields}
+        # Read only the small arrays needed for moments. `_episode` materializes
+        # every NPZ member, including large RGB sequences that normalization
+        # never uses; doing that for every training episode is wasteful.
+        for row in self.rows:
+            path=(self.path.parent/row['path']).resolve()
+            with np.load(path,allow_pickle=False) as arrays:
+                available=set(arrays.files)
+                for name,key in fields:
+                    if key not in available:
+                        raise ValueError(f'Training episode lacks normalization array: {key}')
+                    values=arrays[key].astype('float64')
+                    if values.ndim!=2 or not np.isfinite(values).all():
+                        raise ValueError(f'Invalid normalization array: {key}')
+                    counts[name]+=len(values)
+                    total=values.sum(0)
+                    square=(values*values).sum(0)
+                    totals[name]=total if totals[name] is None else totals[name]+total
+                    squares[name]=square if squares[name] is None else squares[name]+square
+        result={}
+        for name,_ in fields:
+            mean=totals[name]/counts[name]
+            scale=np.sqrt(np.maximum(squares[name]/counts[name]-mean*mean,0.)).clip(.01)
+            result[name+'_mean'],result[name+'_scale']=mean.tolist(),scale.tolist()
         return result
 
 
