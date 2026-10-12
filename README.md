@@ -26,6 +26,25 @@ Agent 架构优化：共享技能生命周期、G1 有预算的任务重规划�
 
 十二种桌面操作环境见 [G1 操作任务虚拟世界](docs/19_manipulation_worlds.md)。运行 `python scripts/workcell_sim.py --task stack_block` 打开积木工作台；支持双机器人和柔性毛巾场景。
 
+`stack_block` 当前提供显式标记的两指夹爪代理、真值隔离操作会话、固定技能/独立验证器接口，以及无世界模型基线运行器：
+
+```bash
+python scripts/stack_block_baseline.py --output-dir runs/stack_block_baseline_<unique-name>
+```
+
+阶段一已有无世界模型堆叠基线：jittered 开发 seeds 0–9 为 10/10；两个独立 seed 批次共 79/80（98.75%，Wilson 95% 区间约 93.3%–99.8%），seed 106 在放置阶段倾倒并由真值验证器判失败。该结果只适用于当前窄幅 jitter 初态；基线在放置判据稳定后立即终止，撤离技能尚未验收。运行器失败时以非零状态退出，并将失败 episode 保留在分母。夹爪是显式平行夹爪代理，不代表真实 Dex1 手部模型。
+
+同步 RGB / 状态 / 动作 / 物体真值采集及视觉模型训练入口：
+
+```bash
+python scripts/collect_stack_block_visual.py --episodes 40 --seed-start 3000 --image-size 64 --output-dir runs/stack_block_visual_<unique-name>
+python -m wmal.training.visual_cli train --manifest runs/stack_block_visual_<unique-name>/manifest.json --output runs/stack_block_model_<unique-name> --config configs/training/stack_block_visual_v2.json
+```
+
+采集器按 episode 生成 train / validation / calibration / test split；`object_truth` 是监督/评估标签，不进入模型输入。v8 的独立 test 整体对象误差优于 persistence，但堆叠目标 `block_0` 的位置/姿态误差更差，事件 Brier 也落后；续训的 v9 32 步候选在 validation 上仍明显输给 persistence 的 `block_0` 位姿预测，因此暂不进入世界模型控制实验。完整对照、划分和哈希见 [堆叠任务世界模型实验进展](docs/20_stack_block_experiment_progress.md)。
+
+另有冻结的 RGB-only 桌面方块 XY 定位器入口：`fit-rgb-xy-localizer`、`calibrate-rgb-xy-localizer`、`evaluate-rgb-xy-localizer`。它在独立 16-episode test 上平均 XY 平面误差 3.55 mm，但只验证静止桌面位置，不是动作条件世界模型，也未接入操作控制；数据划分、校准覆盖和复现命令见上述实验进展文档。
+
 新增 [十项动作规划实验与模型训练优化](docs/18_ten_experiments.md)：批量运行任务、多个规划种子、阶段结果统计，以及验证集多步预测选型。
 
 室内绕障实验：`python scripts/g1_agent_sim.py --config configs/g1_indoor.json`，输入目标 `4 0`。

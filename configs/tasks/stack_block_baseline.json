@@ -1,0 +1,20 @@
+{
+  "schema": "wmal.stack_block_baseline.v1",
+  "task": "stack_block",
+  "world_model": "disabled",
+  "initial_state_profile": "nominal",
+  "seeds": [0],
+  "control_period_s": 0.02,
+  "max_episode_steps": 2000,
+  "skill_budget_control_steps": 900,
+  "skill_timeout_s": 120.0,
+  "waypoint_profile": "g1-left-stack-v1",
+  "verifier": {
+    "target_xy_tolerance_m": 0.055,
+    "lift_height_m": 0.035,
+    "max_linear_speed_m_s": 0.025,
+    "drop_reset_tolerance_m": 0.02,
+    "drop_stable_samples": 2,
+    "stable_samples": 8
+  }
+}
