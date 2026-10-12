@@ -29,7 +29,6 @@ class JsonlEventTail:
         self._last_error = None
         self._exists = False
         self._prefix_hash = sha256()
-        self._mtime_ns = None
 
     @property
     def status(self):
@@ -50,7 +49,6 @@ class JsonlEventTail:
             self._head_line = None
             self._exists = False
             self._prefix_hash = sha256()
-            self._mtime_ns = None
 
     def read_new(self):
         with self._lock:
@@ -66,9 +64,8 @@ class JsonlEventTail:
                     self._restart_source()
                 elif self._identity is not None and info.st_size < self._offset:
                     self._restart_source()
-                elif (self._identity is not None and self._offset and info.st_size == self._offset
-                      and self._mtime_ns != info.st_mtime_ns):
-                    # Appends remain incremental; rare same-length rewrites require a content check.
+                elif self._identity is not None and self._offset and info.st_size == self._offset:
+                    # Some filesystems can rewrite within one timestamp tick; compare content.
                     stream.seek(0)
                     digest = sha256()
                     for block in iter(lambda: stream.read(65_536), b''):
@@ -95,7 +92,6 @@ class JsonlEventTail:
                     self._offset = stream.tell()
                     self._prefix_hash.update(chunk)
                     events.extend(self._consume(chunk, remaining=1000 - len(events)))
-                self._mtime_ns = info.st_mtime_ns
                 return events
 
     def _restart_source(self):
@@ -107,7 +103,6 @@ class JsonlEventTail:
         self._line = 0
         self._head_line = None
         self._prefix_hash = sha256()
-        self._mtime_ns = None
 
     def _record_error(self, kind, message, line=None):
         self._error_count += 1

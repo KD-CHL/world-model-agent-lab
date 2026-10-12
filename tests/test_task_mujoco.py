@@ -1,6 +1,7 @@
 """Actual G1 physics validates hold time and the explicit experimental pulse."""
 import os
-os.environ.setdefault('MUJOCO_GL','egl')
+if os.name != 'nt':
+    os.environ.setdefault('MUJOCO_GL','egl')
 import importlib.util
 import runpy
 from pathlib import Path

@@ -5,8 +5,10 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import select
+import stat
 import sys
 import time
 
@@ -17,6 +19,33 @@ from wmal.envs.visual_workcell import VisualWorkcellSession, TARGET_LOW, TARGET_
 from wmal.logging.manifest import atomic_json, build_manifest
 from wmal.models.horizon_calibration import HorizonCalibration
 from wmal.models.visual_latent import VisualWorldModel
+
+
+def stdin_ready(stream):
+    if os.name!='nt':
+        return stream in select.select([stream],[],[],0)[0]
+    try:
+        if stream.isatty():
+            import msvcrt
+            return msvcrt.kbhit()
+        descriptor=stream.fileno()
+        if stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return True  # Regular files are always nonblocking, including at EOF.
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        handle=msvcrt.get_osfhandle(descriptor)
+        available=wintypes.DWORD()
+        kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
+        peek=kernel32.PeekNamedPipe
+        peek.argtypes=(wintypes.HANDLE,wintypes.LPVOID,wintypes.DWORD,wintypes.LPDWORD,
+                       wintypes.LPDWORD,wintypes.LPDWORD)
+        peek.restype=wintypes.BOOL
+        if peek(handle,None,0,None,ctypes.byref(available),None):
+            return available.value>0
+        return ctypes.get_last_error()==109  # Broken pipe means readline returns EOF.
+    except (AttributeError,OSError,ValueError,ImportError):
+        return False
 
 
 def candidates(observation, goal, horizon, rng):
@@ -243,7 +272,7 @@ def main():
                             session.idle()
                         else:
                             session.publish_monitor_frame()
-                        if stdin_active and sys.stdin in select.select([sys.stdin],[],[],0)[0]:
+                        if stdin_active and stdin_ready(sys.stdin):
                             line=sys.stdin.readline()
                             if not line:
                                 stdin_active=False

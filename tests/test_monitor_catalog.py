@@ -101,14 +101,17 @@ class RunCatalogTests(unittest.TestCase):
             pass
         with self.assertRaises((ValueError, FileNotFoundError)):
             self.catalog.read_json_artifact(run_id, '../outside.json')
+        with self.assertRaises(KeyError):
+            self.catalog.resolve_run('unknown-run')
         with self.assertRaises((ValueError, FileNotFoundError)):
             self.catalog.read_json_artifact(run_id, 'linked.json')
         inside_link = self.run / 'inside_link.json'
-        inside_link.symlink_to(self.run / 'task_000.json')
+        try:
+            inside_link.symlink_to(self.run / 'task_000.json')
+        except (OSError, NotImplementedError):
+            self.skipTest('File symlinks are not permitted in this environment')
         with self.assertRaises(ValueError):
             self.catalog.read_json_artifact(run_id, 'inside_link.json')
-        with self.assertRaises(KeyError):
-            self.catalog.resolve_run('unknown-run')
 
     def test_rejects_unsafe_npz_members_and_invalid_frame_indices(self):
         run_id = self.catalog.list_runs()[0]['run_id']

@@ -11,6 +11,14 @@ import unittest
 HELPERS = Path(__file__).resolve().parents[1] / 'scripts/ros2_build_helpers.bash'
 
 
+def bash_path(path):
+    if os.name != 'nt':
+        return str(path)
+    converted = subprocess.run(['cygpath', '-u', str(path)], capture_output=True, text=True)
+    converted.check_returncode()
+    return converted.stdout.strip()
+
+
 class RosBuildHelperTests(unittest.TestCase):
     def test_job_limit_reaches_make_and_cmake_and_rejects_zero(self):
         env = dict(os.environ, WMAL_ROS_BUILD_JOBS='3')
@@ -53,10 +61,16 @@ class RosBuildHelperTests(unittest.TestCase):
             curl.write_text('#!/usr/bin/env bash\ncp "$ROS_ARCHIVE_FIXTURE" "${@: -1}"\n'
                             + ('exit 22\n' if failed_transfer else ''))
             curl.chmod(0o755)
-            env = dict(os.environ, PATH=f'{bin_dir}:{os.environ["PATH"]}',
-                       ROS_ARCHIVE_FIXTURE=str(fixture))
+            env = dict(os.environ, PATH=os.pathsep.join((str(bin_dir), os.environ['PATH'])),
+                       ROS_ARCHIVE_FIXTURE=bash_path(fixture))
+            if os.name == 'nt':
+                bash_env = root / 'bash_env.sh'
+                bash_env.write_text('export PATH="$(cygpath -u "$WMAL_TEST_BIN_DIR"):$PATH"\n',
+                                    encoding='utf-8')
+                env.update(BASH_ENV=str(bash_env), WMAL_TEST_BIN_DIR=str(bin_dir))
             command = ['bash', '-c', 'set -e; source "$1"; wmal_fetch_ros_source '
-                       '"$2" repo 1.0 "$3"', 'bash', str(HELPERS), str(workspace), checksum]
+                       '"$2" repo 1.0 "$3"', 'bash', bash_path(HELPERS),
+                       bash_path(workspace), checksum]
             result = subprocess.run(command, env=env, capture_output=True, text=True)
             if failed_transfer:
                 self.assertNotEqual(result.returncode, 0)
