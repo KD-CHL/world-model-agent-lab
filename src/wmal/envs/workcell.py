@@ -13,17 +13,44 @@ TASKS = {
     'wipe_table': 'Wipe_Table', 'dualrobot_clean_table': 'DualRobot_Clean_Table',
 }
 
+STACK_GRIPPER_CONFIG = {
+    'asset_kind': 'synthetic_parallel_jaw_proxy',
+    'is_dex1': False,
+    'name_prefix': 'g1_0_stack_gripper_',
+    'left_joint': 'g1_0_stack_gripper_left_finger_joint',
+    'right_joint': 'g1_0_stack_gripper_right_finger_joint',
+    'left_actuator': 'g1_0_stack_gripper_left_finger_actuator',
+    'right_actuator': 'g1_0_stack_gripper_right_finger_actuator',
+    'left_geom': 'g1_0_stack_gripper_left_finger_geom',
+    'right_geom': 'g1_0_stack_gripper_right_finger_geom',
+    'min_opening_m': .034,
+    'max_opening_m': .12,
+    'max_speed_m_s': .04,
+    'max_force_n': 8.0,
+    'finger_max_slide_m': .043,
+    'finger_base_half_gap_m': .024,
+    'finger_half_width_m': .007,
+    # Fixed local-frame compensation calibrated at the frozen grasp waypoint.
+    # This keeps the simple jaws horizontal without changing the wrist asset.
+    'mount_quaternion_wxyz': [.735475, .262421, .495054, -.380965],
+}
+STACK_WORKCELL_CAMERA_FOVY_DEG = 32.0
+
 
 class WorkcellScene(IndoorScene):
     table_top = .78
 
-    def __init__(self, task, seed=0):
+    def __init__(self, task, seed=0, layout_profile='manipulation'):
         super().__init__()
         if task not in TASKS:
             raise ValueError('Unknown workcell task: ' + task)
-        self.task, self.seed = task, seed
+        if layout_profile not in ('manipulation', 'legacy_visual'):
+            raise ValueError('Unknown workcell layout profile')
+        self.task, self.seed, self.layout_profile = task, seed, layout_profile
+        self.has_stack_gripper = task == 'stack_block' and layout_profile == 'manipulation'
+        self.worktable_center = (0., .95) if self.has_stack_gripper else (.85, 0.)
         self.boxes = tuple(b for b in self.boxes if b.name != 'island') + (
-            Box('worktable', .85, 0., .45, .65, self.table_top),)
+            Box('worktable', *self.worktable_center, .45, .65, self.table_top),)
         self.objects = []
         self.regions = []
 
@@ -35,26 +62,49 @@ class WorkcellScene(IndoorScene):
         room.populate(spec, mj)
         self.spec, self.mj = spec, mj
         self.geom(spec.worldbody,'workcell_floor',[0,0,0],[0,0,.05],[.72,.75,.78,1],'plane')
-        self.geom(spec.worldbody, 'table_top', [.85,0.,.75], [.45,.65,.03], [.65,.48,.3,1])
-        for x in (.46, 1.24):
-            for y in (-.59, .59):
+        table_x, table_y = self.worktable_center
+        self.geom(spec.worldbody, 'table_top', [table_x,table_y,.75], [.45,.65,.03], [.65,.48,.3,1])
+        for x in (table_x-.39, table_x+.39):
+            for y in (table_y-.59, table_y+.59):
                 self.geom(spec.worldbody, f'leg_{x}_{y}', [x,y,.36], [.035,.035,.36], [.25,.28,.3,1])
-        spec.worldbody.add_camera(name='workcell_overview', pos=[2.1,-2.1,2.3],
-                                  xyaxes=[.86,.51,0.,-.28,.47,.84], fovy=48)
-        spec.worldbody.add_camera(name='workcell_top', pos=[.85,0.,2.4],
-                                  xyaxes=[0.,1.,0.,-1.,0.,0.], fovy=55)
-        # Robot-facing RGB viewpoint; intrinsics are synthetic and uncalibrated.
-        spec.worldbody.add_camera(name='workcell_front', pos=[.05,0.,1.35],
-                                  xyaxes=[0.,-1.,0.,.58,0.,.82], fovy=70)
+        if self.has_stack_gripper:
+            # Camera looks down and toward the manipulation table. The prior
+            # basis pointed its optical axis above the table, making blocks
+            # subpixel in collected world-model observations.
+            spec.worldbody.add_camera(name='workcell_overview', pos=[.15,1.65,1.85],
+                                      xyaxes=[-.999,-.039,0.,.025,-.649,.761],
+                                      fovy=STACK_WORKCELL_CAMERA_FOVY_DEG)
+            spec.worldbody.add_camera(name='workcell_top', pos=[0.,.95,2.4],
+                                      xyaxes=[1.,0.,0.,0.,-1.,0.], fovy=55)
+            spec.worldbody.add_camera(name='workcell_front', pos=[0.,.0,1.35],
+                                      xyaxes=[1.,0.,0.,0.,.58,.82], fovy=70)
+        else:
+            spec.worldbody.add_camera(name='workcell_overview', pos=[2.1,-2.1,2.3],
+                                      xyaxes=[.86,.51,0.,-.28,.47,.84], fovy=48)
+            spec.worldbody.add_camera(name='workcell_top', pos=[.85,0.,2.4],
+                                      xyaxes=[0.,1.,0.,-1.,0.,0.], fovy=55)
+            # Robot-facing RGB viewpoint; intrinsics are synthetic and uncalibrated.
+            spec.worldbody.add_camera(name='workcell_front', pos=[.05,0.,1.35],
+                                      xyaxes=[0.,-1.,0.,.58,0.,.82], fovy=70)
         rng = np.random.default_rng(self.seed)
         def item(name, x, y, size, color, kind='box', mass=.08):
-            return self.object(name, x+float(rng.uniform(-.008,.008)), y,
+            x = x if self.task == 'stack_block' else x+float(rng.uniform(-.008,.008))
+            return self.object(name, x, y,
                                size, color, kind, mass)
         red, blue, green = [ .85,.18,.12,1], [.15,.4,.85,1], [.18,.7,.35,1]
-        if self.task == 'stack_block':
-            for i, color in enumerate((red,blue,green)):
-                item(f'block_{i}', .62, -.28+i*.25, [.035]*3, color)
-            self.region('stack_target', 1.02,0.,.1,.1)
+        if self.has_stack_gripper:
+            # Place the fixed-base robot's first manipulation zone within its measured
+            # left-arm workspace. block_1 is the support, block_0 is manipulated,
+            # and block_2 remains a distractor.
+            item('block_0', .08, .42, [.035]*3, red)
+            item('block_1', .20, .42, [.035]*3, blue)
+            item('block_2', -.16, 1.05, [.035]*3, green)
+            self.region('stack_target', .20, .42, .1, .1)
+        elif self.task == 'stack_block':
+            item('block_0', .62, 0., [.035]*3, red)
+            item('block_1', .74, 0., [.035]*3, blue)
+            item('block_2', .62, .28, [.035]*3, green)
+            self.region('stack_target', .98, 0., .1, .1)
         elif self.task == 'bag_insert':
             self.container('bag_rigid_proxy', 1.,.18,.14,.15,.2, [.55,.4,.2,1])
             item('package', .6,-.25,[.06,.045,.04],blue)
@@ -143,17 +193,21 @@ class WorkcellScene(IndoorScene):
                 'dataset_reference':'https://huggingface.co/datasets/unitreerobotics/G1_'+TASKS[self.task],
                 'fidelity':'procedural task-inspired geometry; not dataset reconstruction',
                 'robots':2 if self.task=='dualrobot_clean_table' else 1,
+                'worktable_center':list(self.worktable_center),
+                'gripper':dict(STACK_GRIPPER_CONFIG) if self.has_stack_gripper else None,
                 'robot_base':'fixed', 'dynamic_objects':self.objects,'regions':self.regions,
                 'cameras':['workcell_overview','workcell_top','workcell_front'],
+                'camera_fovy_deg':({'workcell_overview':STACK_WORKCELL_CAMERA_FOVY_DEG}
+                                   if self.has_stack_gripper else {}),
                 'limitations':['Existing G1 model has no Dex1 actuated gripper; no manipulation policy loaded',
                     'Bag is a rigid open container proxy; towel is an uncalibrated flexible grid',
                     'Wipe/erase marks are visual annotations, not contact-driven task rewards',
                     'Fruit is rigid; medicine uses rigid pellets; no cutting or fluid physics']}
 
 
-def build_workcell(task, seed=0):
+def build_workcell(task, seed=0, *, layout_profile='manipulation'):
     import mujoco as mj
-    scene = WorkcellScene(task,seed)
+    scene = WorkcellScene(task,seed,layout_profile)
     spec = mj.MjSpec()
     spec.option.timestep = .002
     spec.option.integrator = mj.mjtIntegrator.mjINT_IMPLICITFAST
@@ -163,6 +217,36 @@ def build_workcell(task, seed=0):
         child = mj.MjSpec.from_file(str(MODEL_XML))
         child.delete(child.joint('floating_base_joint'))
         child.body('pelvis').pos = [0.,0.,.8]
+        if scene.has_stack_gripper and robot == 0:
+            wrist = child.body('left_wrist_yaw_link')
+            mount = wrist.add_body(name='stack_gripper_mount', pos=[.08, 0., -.035],
+                                   quat=STACK_GRIPPER_CONFIG['mount_quaternion_wxyz'])
+            mount.add_site(name='stack_gripper_center', pos=[0., 0., 0.],
+                           size=.004, rgba=[1., .9, .1, 1.])
+            for side, axis in (('left', [0.,1.,0.]), ('right', [0.,-1.,0.])):
+                finger = mount.add_body(
+                    name='stack_gripper_'+side+'_finger',
+                    pos=[0., STACK_GRIPPER_CONFIG['finger_base_half_gap_m'], 0.]
+                    if side == 'left' else
+                    [0., -STACK_GRIPPER_CONFIG['finger_base_half_gap_m'], 0.])
+                finger.add_joint(
+                    name='stack_gripper_'+side+'_finger_joint',
+                    type=mj.mjtJoint.mjJNT_SLIDE, axis=axis, limited=True,
+                    range=[0., STACK_GRIPPER_CONFIG['finger_max_slide_m']],
+                    damping=1.0, actfrclimited=True,
+                    actfrcrange=[-STACK_GRIPPER_CONFIG['max_force_n'], STACK_GRIPPER_CONFIG['max_force_n']])
+                finger.add_geom(
+                    name='stack_gripper_'+side+'_finger_geom', type=mj.mjtGeom.mjGEOM_BOX,
+                    pos=[0.,0.,0.], size=[.040, STACK_GRIPPER_CONFIG['finger_half_width_m'], .050],
+                    mass=.012, friction=[.9,.01,.001], rgba=[.16,.17,.19,1.])
+                actuator = spec.add_actuator(
+                    name='g1_0_stack_gripper_'+side+'_finger_actuator',
+                    trntype=mj.mjtTrn.mjTRN_JOINT,
+                    target='g1_0_stack_gripper_'+side+'_finger_joint',
+                    ctrllimited=True, ctrlrange=[0., STACK_GRIPPER_CONFIG['finger_max_slide_m']],
+                    forcelimited=True,
+                    forcerange=[-STACK_GRIPPER_CONFIG['max_force_n'], STACK_GRIPPER_CONFIG['max_force_n']])
+                actuator.set_to_position(200., 20.)
         for i,name in enumerate(JOINT_NAMES):
             actuator = child.add_actuator(name=name+'_hold',trntype=mj.mjtTrn.mjTRN_JOINT,target=name)
             actuator.set_to_position(float(KP[i]),float(KD[i]))
@@ -179,5 +263,20 @@ def build_workcell(task, seed=0):
             aid = mj.mj_name2id(model,mj.mjtObj.mjOBJ_ACTUATOR,f'g1_{robot}_'+name+'_hold')
             data.qpos[model.jnt_qposadr[jid]] = DEFAULT_JOINT_POS[i]
             data.ctrl[aid] = DEFAULT_JOINT_POS[i]
+    if scene.has_stack_gripper:
+        # The wrist-mounted synthetic jaw proxy replaces the visual rubber hand
+        # as the manipulation contact surface in this one workcell.
+        for name in ('g1_0_left_hand_collision', 'g1_0_left_wrist_collision'):
+            geom_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_GEOM, name)
+            if geom_id >= 0:
+                model.geom_contype[geom_id] = 0
+                model.geom_conaffinity[geom_id] = 0
+        for side in ('left', 'right'):
+            joint_name = f'g1_0_stack_gripper_{side}_finger_joint'
+            actuator_name = f'g1_0_stack_gripper_{side}_finger_actuator'
+            jid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, joint_name)
+            aid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_ACTUATOR, actuator_name)
+            data.qpos[model.jnt_qposadr[jid]] = STACK_GRIPPER_CONFIG['finger_max_slide_m']
+            data.ctrl[aid] = STACK_GRIPPER_CONFIG['finger_max_slide_m']
     mj.mj_forward(model,data)
     return scene, model, data

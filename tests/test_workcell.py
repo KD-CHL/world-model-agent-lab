@@ -13,7 +13,8 @@ class WorkcellTests(unittest.TestCase):
                 mujoco.mj_step(model,data,nstep=250)
                 self.assertTrue(np.isfinite(data.qpos).all())
                 self.assertFalse(any(w.number for w in data.warning))
-                self.assertEqual(model.nu,58 if task=='dualrobot_clean_table' else 29)
+                expected_nu = 58 if task == 'dualrobot_clean_table' else 31 if task == 'stack_block' else 29
+                self.assertEqual(model.nu, expected_nu)
                 self.assertEqual(model.nflex,1 if task=='fold_towel' else 0)
                 for name in scene.objects:
                     self.assertGreater(data.body(name).xpos[2],.70)
@@ -26,3 +27,13 @@ class WorkcellTests(unittest.TestCase):
         np.testing.assert_array_equal(a.qpos,b.qpos)
         with self.assertRaises(ValueError):
             build_workcell('not_a_task')
+
+    def test_stack_block_uses_left_arm_reachable_side_fixture(self):
+        scene, model, data = build_workcell('stack_block', seed=0)
+        metadata = scene.metadata()
+        self.assertEqual(metadata['worktable_center'], [0.0, 0.95])
+        self.assertEqual(metadata['gripper']['asset_kind'], 'synthetic_parallel_jaw_proxy')
+        self.assertFalse(metadata['gripper']['is_dex1'])
+        self.assertLess(abs(data.body('block_0').xpos[0]), .25)
+        self.assertGreater(data.body('block_0').xpos[1], .30)
+        self.assertGreater(data.body('block_1').xpos[1], .30)
