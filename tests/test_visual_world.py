@@ -95,6 +95,105 @@ class VisualDataTests(unittest.TestCase):
                 mask = dataset.event_supervision_for_episode(0)
             np.testing.assert_array_equal(mask, [True])
 
+    def test_event_context_is_aligned_to_prediction_origin_and_missing_reset_is_masked(self):
+        from wmal.datasets.visual_sequences import VisualDataset, write_episode, write_manifest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = make_dataset(root)
+            payload = json.loads(manifest.read_text())
+            rows = payload['episodes']
+            for row in rows:
+                path = root / row['path']
+                with np.load(path, allow_pickle=False) as arrays:
+                    rgb, states, actions = arrays['rgb'].copy(), arrays['states'].copy(), arrays['actions'].copy()
+                events = np.zeros((8, 1), dtype=np.float32)
+                events[0, 0] = 1.0
+                write_episode(path, rgb, states, actions, events=events,
+                              event_mask=np.ones_like(events), overwrite=True)
+            semantics = dict(payload['semantics'])
+            semantics.pop('event_names', None)
+            write_manifest(manifest, rows, source=payload['source'],
+                           event_names=['grasped'], **semantics)
+            dataset = VisualDataset(manifest, 'validation', horizon=2)
+            reset_window, after_transition = dataset[0], dataset[1]
+            np.testing.assert_array_equal(reset_window['event_context'], [0.])
+            np.testing.assert_array_equal(reset_window['event_context_mask'], [0.])
+            np.testing.assert_array_equal(after_transition['event_context'], [1.])
+            np.testing.assert_array_equal(after_transition['event_context_mask'], [1.])
+            np.testing.assert_array_equal(after_transition['events'][0], [0.])
+
+    def test_event_state_archive_rejects_future_label_misalignment(self):
+        from wmal.datasets.visual_sequences import write_episode
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rgb = np.zeros((3, 32, 32, 3), dtype=np.uint8)
+            states = np.zeros((3, 1), dtype=np.float32)
+            actions = np.zeros((2, 1), dtype=np.float32)
+            events = np.asarray([[1.], [0.]], dtype=np.float32)
+            event_states = np.zeros((3, 1), dtype=np.float32)
+            with self.assertRaisesRegex(ValueError, 'transition labels'):
+                write_episode(root/'misaligned.npz', rgb, states, actions,
+                              events=events, event_mask=np.ones_like(events),
+                              extra_arrays={'event_states': event_states,
+                                            'event_state_mask': np.ones_like(event_states)})
+
+    def test_event_persistence_metrics_use_origin_label_not_first_future_label(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import wmal.training.visual_trainer as trainer
+        from wmal.datasets.visual_sequences import write_episode, write_manifest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = make_dataset(root)
+            payload = json.loads(manifest.read_text())
+            rows = payload['episodes']
+            for row in rows:
+                path = root / row['path']
+                with np.load(path, allow_pickle=False) as arrays:
+                    rgb, states, actions = arrays['rgb'].copy(), arrays['states'].copy(), arrays['actions'].copy()
+                events = np.zeros((8, 1), dtype=np.float32)
+                events[0, 0] = 1.0
+                event_states = np.concatenate((np.zeros((1, 1), dtype=np.float32), events), axis=0)
+                write_episode(path, rgb, states, actions, events=events,
+                              event_mask=np.ones_like(events),
+                              extra_arrays={'event_states': event_states,
+                                            'event_state_mask': np.ones_like(event_states)},
+                              overwrite=True)
+            semantics = dict(payload['semantics'])
+            semantics.pop('event_names', None)
+            manifest = write_manifest(manifest, rows, source=payload['source'],
+                                      event_names=['grasped'], **semantics)
+            semantics = json.loads(manifest.read_text())['semantics']
+
+            class FixedEventModel:
+                version = 'fixed-event-model'
+                config = SimpleNamespace(context_steps=0)
+                metadata = {'episode_lineage': {
+                    'schema': 'wmal.episode_lineage.v1',
+                    'train': {'episode_ids': [], 'sha256': []},
+                    'selection': {'episode_ids': ['validation_0', 'validation_1'], 'sha256': []}}}
+
+                def __init__(self):
+                    self.semantics = semantics
+
+                def predict_sample(self, sample, actions=None):
+                    horizon = len(sample['actions'])
+                    return {
+                        'states': np.zeros((1, horizon, sample['states'].shape[-1]), dtype=np.float32),
+                        'frames': np.zeros((1, horizon, 3, 32, 32), dtype=np.float32),
+                        'event_probabilities': np.full((1, horizon, 1), .8, dtype=np.float32),
+                        'event_probability_names': ['grasped'],
+                    }
+
+            with patch.object(trainer.VisualWorldModel, 'load', return_value=FixedEventModel()):
+                report = trainer.evaluate_visual(manifest, root / 'unused.pt',
+                                                  horizon=2, split='validation')
+            metrics = report['event_prediction_metrics']
+            self.assertAlmostEqual(metrics['persistence_brier_by_horizon'][0], 2. / 7., places=6)
+            self.assertEqual(metrics['scored_windows_by_horizon'], [14, 14])
+            self.assertEqual(metrics['scored_labels_by_horizon'], [14, 14])
+
     def test_duplicate_episode_or_content_and_wrong_alignment_are_rejected(self):
         from wmal.datasets.visual_sequences import VisualDataset, write_episode
         with tempfile.TemporaryDirectory() as tmp:

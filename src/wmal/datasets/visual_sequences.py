@@ -1,6 +1,7 @@
 """Episode-disjoint RGB/action data with explicit control semantics.
 
 RGB[t] and state[t] precede action[t]; RGB[t+1] is its observed consequence.
+Event[t] labels the post-action event state aligned to RGB/state[t+1].
 Training, model selection, calibration and final test episodes never overlap.
 """
 from collections import OrderedDict
@@ -66,6 +67,31 @@ def validate_arrays(rgb, states, actions, events=None, event_mask=None):
         raise ValueError('Invalid event targets/masks')
 
 
+def validate_event_state_arrays(arrays):
+    """Validate event labels aligned to observations, including the reset state."""
+    has_states = 'event_states' in arrays
+    has_mask = 'event_state_mask' in arrays
+    if has_states != has_mask:
+        raise ValueError('Event state labels require an explicit state mask')
+    if not has_states:
+        return
+    events = arrays.get('events')
+    event_mask = arrays.get('event_mask')
+    states, mask = arrays['event_states'], arrays['event_state_mask']
+    if events is None or event_mask is None:
+        raise ValueError('Event state labels require transition event labels')
+    expected = (len(arrays['states']), events.shape[1])
+    if (states.shape != expected or mask.shape != expected
+            or not np.isfinite(states).all() or not np.isfinite(mask).all()
+            or np.any((states < 0) | (states > 1))
+            or np.any((mask != 0) & (mask != 1))):
+        raise ValueError('Event state labels/masks do not match observation alignment')
+    known = event_mask.astype(bool)
+    if (not np.array_equal(mask[1:].astype(bool), known)
+            or not np.array_equal(states[1:][known], events[known])):
+        raise ValueError('Post-action event states do not match transition labels/masks')
+
+
 def write_episode(path, rgb, states, actions, *, events=None, event_mask=None,
                   extra_arrays=None, overwrite=False):
     rgb, states, actions = np.asarray(rgb), np.asarray(states), np.asarray(actions)
@@ -88,6 +114,7 @@ def write_episode(path, rgb, states, actions, *, events=None, event_mask=None,
         if np.issubdtype(extra.dtype, np.number) and not np.isfinite(extra).all():
             raise ValueError('Extra arrays must contain only finite numeric values')
         arrays[name] = extra
+    validate_event_state_arrays(arrays)
     with tempfile.NamedTemporaryFile(dir=path.parent, suffix='.npz', delete=False) as handle:
         temporary = Path(handle.name)
     try:
@@ -108,6 +135,7 @@ def write_manifest(path, episodes, *, action_schema, action_order, state_order, 
         with np.load(file, allow_pickle=False) as arrays:
             validate_arrays(arrays['rgb'], arrays['states'], arrays['actions'],
                             arrays.get('events'), arrays.get('event_mask'))
+            validate_event_state_arrays(arrays)
             if (arrays['rgb'].shape[1] != image_size or arrays['states'].shape[1] != len(state_order)
                     or arrays['actions'].shape[1] != len(action_order)
                     or len(event_names) != (arrays['events'].shape[1] if 'events' in arrays else 0)
@@ -193,6 +221,7 @@ class VisualDataset:
                 arrays = {key: handle[key] for key in handle.files}
             validate_arrays(arrays['rgb'], arrays['states'], arrays['actions'],
                             arrays.get('events'), arrays.get('event_mask'))
+            validate_event_state_arrays(arrays)
             semantics=self.semantics
             if (len(arrays['actions']) != row['steps'] or arrays['states'].shape[1]!=len(semantics['state_order'])
                     or arrays['actions'].shape[1]!=len(semantics['action_order'])
@@ -235,6 +264,18 @@ class VisualDataset:
         h = self.horizon
         events = arrays.get('events', np.zeros((len(arrays['actions']),0),dtype='float32'))
         mask = arrays.get('event_mask', np.zeros_like(events))
+        if 'event_states' in arrays:
+            event_context = arrays['event_states'][t]
+            event_context_mask = arrays['event_state_mask'][t]
+        elif t > 0:
+            # Legacy archives align event labels only to post-action frames.
+            # The previous transition is the last known label at this origin.
+            event_context = events[t-1]
+            event_context_mask = mask[t-1]
+        else:
+            # Do not infer reset labels from the first future target.
+            event_context = np.zeros(events.shape[1], dtype=np.float32)
+            event_context_mask = np.zeros(events.shape[1], dtype=np.float32)
         k=self.context_steps
         length=min(t,k)
         padding=k-length
@@ -256,6 +297,8 @@ class VisualDataset:
                 'states': states.astype('float32'),
                 'actions': actions.astype('float32'),
                 'events': events[t:t+h], 'event_mask': mask[t:t+h],
+                'event_context': np.asarray(event_context, dtype=np.float32),
+                'event_context_mask': np.asarray(event_context_mask, dtype=np.float32),
                 'is_first':is_first,'context_length':length,'prediction_offset':k,
                 'episode_id': self.rows[episode]['episode_id'], 'offset': t}
         if object_truth is not None:

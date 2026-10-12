@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import stack_block_baseline as baseline
@@ -97,6 +98,65 @@ class StackBlockBaselineTests(unittest.TestCase):
                              'traceable-gripper-action')
             self.assertTrue(trace['gripper_command_receipt']['accepted'])
             self.assertTrue(trace['gripper_command_receipt']['executed'])
+
+    def test_interrupted_feedback_still_writes_confirmed_execution_to_jsonl(self):
+        from wmal.envs.manipulation_session import ManipulationSession
+
+        config = baseline.load_config(CONFIG)
+        original_observe = ManipulationSession.observe
+        calls = {'count': 0}
+
+        def fail_after_first_control_dispatch(session):
+            calls['count'] += 1
+            if calls['count'] >= 5:
+                raise RuntimeError('injected persistent camera failure')
+            return original_observe(session)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / 'run'
+            run_dir.mkdir()
+            try:
+                with patch.object(ManipulationSession, 'observe', fail_after_first_control_dispatch):
+                    baseline.run_episode(config, 0, run_dir, on_step=lambda *_: None)
+            except Exception as error:
+                self.fail(f'interrupted execution evidence must be written: {error}')
+            lines = (run_dir / 'events.jsonl').read_text(encoding='utf-8').splitlines()
+            self.assertEqual(len(lines), 1)
+            event = json.loads(lines[0])
+            self.assertEqual(event['status'], 'failed')
+            self.assertEqual(event['failure'], 'post_action_observation_failed')
+            self.assertEqual(event['end_step_id'], 1)
+            self.assertFalse(event['observation_complete'])
+            self.assertEqual(event['observation_final']['step_id'], 0)
+            trace = event['action_trace'][0]
+            self.assertEqual(trace['control_steps'], 1)
+            self.assertEqual(trace['end_step_id'], 1)
+            self.assertEqual(trace['final_observation'], None)
+            self.assertIsNotNone(trace['final_truth'])
+
+    def test_visual_collector_stores_reset_and_post_action_event_states(self):
+        from collect_stack_block_visual import EpisodeBuffer
+        from wmal.envs.manipulation_session import ActionCommand, LEFT_ARM_JOINTS, ManipulationSession
+
+        session = ManipulationSession(render=True, image_size=32, control_period_s=.02)
+        self.addCleanup(session.close)
+        observation, _ = session.reset(5, 'nominal')
+        buffer = EpisodeBuffer()
+        buffer.reset(observation, session.truth_for_verifier())
+        receipt = session.execute(ActionCommand(
+            episode_id=observation.episode_id, expected_step_id=observation.step_id,
+            action_id='event-state-alignment',
+            joint_targets={name: observation.joint_position[observation.joint_names.index(name)]
+                           for name in LEFT_ARM_JOINTS},
+            duration_steps=1))
+        buffer.step(receipt.observations[0], receipt,
+                    session.truth_trace_for_verifier(receipt)[0])
+        _, _, _, events, event_mask, extra = buffer.arrays()
+        self.assertEqual(extra['event_states'].shape, (2, 4))
+        self.assertEqual(extra['event_state_mask'].shape, (2, 4))
+        np.testing.assert_array_equal(extra['event_states'][0], np.zeros(4, dtype=np.float32))
+        np.testing.assert_array_equal(extra['event_states'][1:], events)
+        np.testing.assert_array_equal(extra['event_state_mask'][1:], event_mask)
 
 
 if __name__=='__main__': unittest.main()

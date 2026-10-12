@@ -135,10 +135,13 @@ def run_episode(config, seed, run_dir, *, render=False, render_image_size=32,
                     'skill': skill_run.name, 'status': skill_run.status,
                     'control_steps': skill_run.control_steps,
                     'observation_final': observation.to_agent_dict(),
+                    'observation_complete': (not skill_run.receipts or
+                        observation.step_id >= max(receipt.end_step_id for receipt in skill_run.receipts)),
                     'skill_evidence': [item.__dict__ if hasattr(item, '__dict__') else item
                                        for item in skill_run.evidence],
                     'start_step_id': command.expected_step_id,
-                    'end_step_id': observation.step_id,
+                    'end_step_id': max((receipt.end_step_id for receipt in skill_run.receipts),
+                                       default=observation.step_id),
                     'action_ids': [r.action_id for r in skill_run.receipts],
                     'action_trace': [
                         {
@@ -181,10 +184,13 @@ def run_episode(config, seed, run_dir, *, render=False, render_image_size=32,
                 if on_step is not None:
                     for receipt in skill_run.receipts:
                         snapshots = session.truth_trace_for_verifier(receipt)
-                        if len(snapshots) != len(receipt.observations):
-                            raise RuntimeError('Observation/truth trace length mismatch')
-                        for step_observation, truth in zip(receipt.observations, snapshots):
-                            on_step(step_observation, receipt, truth)
+                        truth_by_step = {truth.step_id: truth for truth in snapshots}
+                        # A control step without a matching observation is kept
+                        # in the action trace, but is not a trainable visual row.
+                        for step_observation in receipt.observations:
+                            truth = truth_by_step.get(step_observation.step_id)
+                            if truth is not None:
+                                on_step(step_observation, receipt, truth)
                 events.write(json.dumps(event, sort_keys=True) + '\n')
                 results.append(event)
                 if skill_run.status not in ('executed', 'succeeded'):

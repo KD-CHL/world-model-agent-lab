@@ -155,6 +155,14 @@ Before implementation, a MuJoCo Jacobian probe confirmed that the present forwar
 - [x] Record the result in the experiment progress and SDD ledger.
 - [x] Commit the completed follow-up.
 
+### Final review fix pass: partial feedback evidence and event-label timing
+
+- [x] Preserve verifier truth for completed physics steps when image observation fails; return the last confirmed observation without retrying a latched sensor fault.
+- [x] Persist incomplete receipts with physical end step and explicit observation completeness; exclude unpaired observations from visual training rows.
+- [x] Store event state/mask at reset and each post-action observation; compare persistence against the prediction-origin label and mask legacy offset-zero windows.
+- [x] Re-evaluate only the frozen v10 validation split with corrected event metrics; leave the external test metrics unused.
+- [x] Add TDD regressions for interrupted JSONL durability, event-state timing/masks, and exact persistence Brier values; full suite passed (297 run, 290 passed, 7 skipped).
+
 **M1 status:** The no-model stack-placement gate passes on the tested jitter family (79/80 across two held-out batches). The verifier is now v2 and records a distinct `object_dropped_after_lift` failure with configured thresholds; deterministic disturbed seed 7405 reproduced that report while successful seed 7402 emitted no drop event. The synthetic gripper and fixed-arm proxy remain explicit limitations; retreat is not accepted.
 
 **M2 status:** Dataset, training, calibration, and evaluation paths run. v8's independent test and the v9 horizon-32 validation both fail the manipulated `block_0` pose gate; v9 event Brier improves only at longer horizons. Current recovery data contains retries but no successful retry recoveries, and state/object uncertainty is not useful enough for risk-sensitive control. New collections add a fourth `object_dropped_after_lift` event channel. Append-only event-head initialization is implemented and verified against the v8 checkpoint and a four-event manifest; the new channel remains untrained. Keep M2 open: collect with an approved, effective recovery behavior, select against manipulated-object validation metrics, and reserve a fresh final test before freezing the next checkpoint. Do not reuse the external collection's test split for v9 or its successors because it has already informed model iteration.

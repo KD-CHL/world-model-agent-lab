@@ -31,6 +31,32 @@ def _average_ranks(values):
     return ranks
 
 
+def _event_sample_scores(probabilities, targets, target_mask, origin, origin_mask):
+    """Score event prediction and persistence only where the origin label is known."""
+    probabilities = np.asarray(probabilities)
+    targets = np.asarray(targets)
+    target_mask = np.asarray(target_mask, dtype=bool)
+    origin = np.asarray(origin)
+    origin_mask = np.asarray(origin_mask, dtype=bool)
+    if (probabilities.shape != targets.shape or target_mask.shape != targets.shape
+            or origin.shape != targets.shape[1:] or origin_mask.shape != origin.shape):
+        raise ValueError('Event labels, masks, and prediction-origin state do not align')
+    mask = target_mask & origin_mask[None, :]
+    persistence = np.broadcast_to(origin[None, :], targets.shape)
+    return (np.square(probabilities-targets),
+            np.square(persistence-targets),
+            ((probabilities >= .5) == (targets >= .5)).astype(float), mask)
+
+
+def _masked_horizon_mean(values, masks):
+    values, masks = np.asarray(values), np.asarray(masks, dtype=bool)
+    counts = masks.sum(axis=(0, 2))
+    totals = (values * masks).sum(axis=(0, 2))
+    means = [float(total/count) if count else None for total, count in zip(totals, counts)]
+    scored_windows = masks.any(axis=2).sum(axis=0).astype(int).tolist()
+    return means, scored_windows, counts.astype(int).tolist()
+
+
 class EpisodeGroupedSampler(Sampler):
     """Shuffle windows while keeping each episode locally cached during a pass."""
     def __init__(self, episode_ids, seed):
@@ -411,7 +437,7 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
             raise ValueError('Object calibration overlaps evaluation episodes')
     frame,state,persist_frame,persist_state,sensitivity=[],[],[],[],[]
     frame_sensitivity,change_error,change_persistence=[],[],[]
-    event_brier,event_accuracy,event_persistence_brier=[],[],[]
+    event_brier,event_accuracy,event_persistence_brier,event_masks=[],[],[],[]
     event_uncertainty,event_actual_error=[],[]
     object_error,object_persistence,object_error_dimensions,object_persistence_dimensions=[],[],[],[]
     object_physical_error_dimensions,object_physical_persistence_dimensions=[],[]
@@ -516,29 +542,43 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         if predicted.get('event_probabilities') is not None:
             event_names=predicted.get('event_probability_names',event_names)
             probabilities=predicted['event_probabilities'].mean(0)
-            # Dataset event arrays already contain only the future horizon;
-            # context frames/actions are carried separately in RGB/state/action.
             targets=sample['events']
             if probabilities.shape != targets.shape:
                 raise ValueError('Event prediction dimensions do not match held-out labels')
-            event_brier.append(np.square(probabilities-targets))
-            event_accuracy.append(((probabilities>=.5)==(targets>=.5)).astype(float))
-            persistence=np.repeat(sample['events'][:1],len(probabilities),axis=0)
-            event_persistence_brier.append(np.square(persistence-targets))
-            event_uncertainty.append(predicted['event_probabilities'].std(0).mean(-1))
-            event_actual_error.append(np.abs(probabilities-targets).mean(-1))
+            scores = _event_sample_scores(
+                probabilities, targets, sample['event_mask'],
+                sample['event_context'], sample['event_context_mask'])
+            model_brier, persistence_brier, accuracy, score_mask = scores
+            event_brier.append(model_brier)
+            event_accuracy.append(accuracy)
+            event_persistence_brier.append(persistence_brier)
+            event_masks.append(score_mask)
+            valid_horizon = score_mask.any(-1)
+            channel_count = np.maximum(score_mask.sum(-1), 1)
+            event_uncertainty.append(predicted['event_probabilities'].std(0).mean(-1)[valid_horizon])
+            event_actual_error.append(
+                ((np.abs(probabilities-targets)*score_mask).sum(-1)/channel_count)[valid_horizon])
     event_metrics=None
     if event_brier:
         errors=np.concatenate(event_actual_error)
         uncertainty=np.concatenate(event_uncertainty)
         error_ranks,uncertainty_ranks=_average_ranks(errors),_average_ranks(uncertainty)
         rank_correlation=(float(np.corrcoef(error_ranks,uncertainty_ranks)[0,1])
-                          if np.std(error_ranks)>0 and np.std(uncertainty_ranks)>0 else None)
+                          if errors.size and np.std(error_ranks)>0
+                          and np.std(uncertainty_ranks)>0 else None)
+        brier_by_horizon, scored_windows, scored_labels = _masked_horizon_mean(event_brier,event_masks)
+        persistence_by_horizon, _, _ = _masked_horizon_mean(event_persistence_brier,event_masks)
+        accuracy_by_horizon, _, _ = _masked_horizon_mean(event_accuracy,event_masks)
         event_metrics={
             'event_names':event_names,
-            'brier_by_horizon':np.mean(event_brier,axis=(0,2)).tolist(),
-            'persistence_brier_by_horizon':np.mean(event_persistence_brier,axis=(0,2)).tolist(),
-            'accuracy_by_horizon':np.mean(event_accuracy,axis=(0,2)).tolist(),
+            'brier_by_horizon':brier_by_horizon,
+            'persistence_brier_by_horizon':persistence_by_horizon,
+            'accuracy_by_horizon':accuracy_by_horizon,
+            'scored_windows_by_horizon':scored_windows,
+            'scored_labels_by_horizon':scored_labels,
+            'persistence_origin':'last known event state at prediction origin',
+            'reset_event_context_policy':(
+                'use stored reset event state; omit offset-zero scoring for legacy archives without one'),
             'ensemble_spread_vs_absolute_error_spearman':rank_correlation,
         }
     report={'schema':'wmal.visual_evaluation.v1','split':split,'model_version':model.version,

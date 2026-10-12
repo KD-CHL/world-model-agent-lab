@@ -244,6 +244,7 @@ class ManipulationSession:
         self._action_ids = set()
         self._trace = []
         self._truth_snapshots = {}
+        self._last_observation = None
         self._fault_reason = None
         self.reset(0, 'nominal')
 
@@ -264,6 +265,11 @@ class ManipulationSession:
     @property
     def trace(self):
         return tuple(self._trace)
+
+    @property
+    def last_observation(self):
+        """Most recent successfully produced observation, which may lag physics after a sensor fault."""
+        return self._last_observation
 
     @property
     def episode_id(self):
@@ -308,6 +314,7 @@ class ManipulationSession:
         self._action_ids.clear()
         self._trace.clear()
         self._truth_snapshots.clear()
+        self._last_observation = None
         self._fault_reason = None
         if self._renderer is not None:
             self._renderer.close()
@@ -359,12 +366,14 @@ class ManipulationSession:
         site_quaternion = np.empty(4, dtype=float)
         self._mj.mju_mat2Quat(site_quaternion,
                               self._data.site_xmat[self._gripper_site_id].reshape(9))
-        return RobotObservation(
+        observation = RobotObservation(
             episode_id=self._episode_id, step_id=self._step_id, sim_time_s=float(self._data.time),
             joint_names=self._joint_names, joint_position=positions, joint_velocity=velocities,
             tool_position_m=site_position,
             tool_quaternion_wxyz=tuple(float(x) for x in site_quaternion),
             gripper=self._gripper.observe(self._data), rgb=rgb)
+        self._last_observation = observation
+        return observation
 
     def truth_for_verifier(self):
         if self._episode_id is None:
@@ -457,9 +466,16 @@ class ManipulationSession:
                 fault = self._fault_reason
                 break
             try:
+                # Preserve verifier-only state for every completed control step,
+                # even if the following camera observation fails.
+                self._truth_snapshots[self._step_id] = self.truth_for_verifier()
+            except Exception:
+                self._fault_reason = 'post_action_truth_snapshot_failed'
+                fault = self._fault_reason
+                break
+            try:
                 observation = self.observe()
                 observations.append(observation)
-                self._truth_snapshots[self._step_id] = self.truth_for_verifier()
             except Exception:
                 self._fault_reason = 'post_action_observation_failed'
                 fault = self._fault_reason

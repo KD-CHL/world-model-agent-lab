@@ -98,12 +98,16 @@ class EpisodeBuffer:
         self.rgb, self.states, self.truth = [], [], []
         self.times, self.steps, self.incoming_action_ids = [], [], []
         self.actions, self.events = [], []
+        self.event_states, self.event_state_mask = [], []
         self.initial_z = None
 
     def reset(self, observation, truth):
         self.initial_z = truth.object('block_0').position[2]
         self.lifted_seen = False
         self.drop_count = 0
+        event, _, _ = _event_vector(observation, truth, self.initial_z)
+        self.event_states = [np.concatenate((event, np.asarray([0.], dtype=np.float32)))]
+        self.event_state_mask = [np.ones(len(EVENT_NAMES), dtype=np.float32)]
         self.rgb = [_rgb_u8(observation)]
         self.states = [_robot_state(observation)]
         self.truth = [_truth_vector(truth)]
@@ -129,8 +133,11 @@ class EpisodeBuffer:
             observation, truth, self.initial_z, was_lifted=self.lifted_seen)
         self.lifted_seen = self.lifted_seen or lifted_now
         self.drop_count = self.drop_count + 1 if dropped_now else 0
-        self.events.append(np.concatenate((event, np.asarray([
-            self.drop_count >= DROP_STABLE_SAMPLES], dtype=np.float32))))
+        event_state = np.concatenate((event, np.asarray([
+            self.drop_count >= DROP_STABLE_SAMPLES], dtype=np.float32)))
+        self.events.append(event_state)
+        self.event_states.append(event_state.copy())
+        self.event_state_mask.append(np.ones(len(EVENT_NAMES), dtype=np.float32))
         self.rgb.append(_rgb_u8(observation))
         self.states.append(_robot_state(observation))
         self.truth.append(_truth_vector(truth))
@@ -150,6 +157,8 @@ class EpisodeBuffer:
             'sim_times_s': np.asarray(self.times, dtype=np.float64),
             'step_ids': np.asarray(self.steps, dtype=np.int64),
             'incoming_action_ids': np.asarray(self.incoming_action_ids, dtype='U128'),
+            'event_states': np.stack(self.event_states),
+            'event_state_mask': np.stack(self.event_state_mask),
         }
         return np.stack(self.rgb), states, actions, events, event_mask, extra
 

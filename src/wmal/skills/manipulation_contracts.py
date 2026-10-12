@@ -233,7 +233,11 @@ class StackBlockSkills:
                         session._gripper_spec.max_force_n)
                     receipt=session.execute(action); receipts.append(receipt); used+=receipt.executed_steps
                     if receipt.interrupted or receipt.executed_steps != chunk:
-                        return SkillRun(command.name,'failed',tuple(receipts),used,(),False,session.observe(),receipt.fault or 'partial_execution')
+                        # A failed feedback read is latched by the session. Do not
+                        # immediately repeat the same read and lose the receipt;
+                        # return the last observation that was actually confirmed.
+                        return SkillRun(command.name,'failed',tuple(receipts),used,(),False,
+                                        session.last_observation,receipt.fault or 'partial_execution')
                     steps-=receipt.executed_steps; current=session.observe()
                     # Closing is deliberately incremental: stop immediately at
                     # measured bilateral fingertip contact, with four bounded

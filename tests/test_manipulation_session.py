@@ -20,6 +20,7 @@ class ManipulationSessionTests(unittest.TestCase):
         self.assertIsNone(self.observation.rgb)
         truth = self.session.truth_for_verifier()
         self.assertTrue(np.isfinite(truth.object('block_0').position).all())
+        self.assertIs(self.session.last_observation, self.observation)
 
     def test_reset_reproduces_scene_robot_gripper_and_time_and_excludes_settle_steps(self):
         first = self.audit
@@ -125,6 +126,11 @@ class ManipulationSessionTests(unittest.TestCase):
         self.assertFalse(receipt.gripper_command_receipt.executed)
         self.assertEqual(receipt.gripper_command_receipt.fault,
                          'post_action_observation_failed')
+        try:
+            truth_trace = self.session.truth_trace_for_verifier(receipt)
+        except KeyError as error:
+            self.fail(f'completed physics steps must retain verifier truth: {error}')
+        self.assertEqual([truth.step_id for truth in truth_trace], [1, 2])
         with self.assertRaises(RuntimeError):
             self.session.execute(self.action(action_id='must-not-retry'))
 
