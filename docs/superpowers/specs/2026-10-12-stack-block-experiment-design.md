@@ -1,19 +1,19 @@
 # 积木堆叠实验路线与阶段一接口规格
 
 日期：2026-10-12
-状态：用户已批准进入实施；本文件定义实施边界，不表示接口或技能已实现。
+状态：用户已批准进入实施。M1 夹爪代理、操作会话、固定技能、独立验证器和无模型基线已在仓库实现；2026-10-13 对照代码更新了接口细节。本规格不代表 M2 世界模型门槛通过。
 
 ## 1. 目标与已知约束
 
 目标是以 `stack_block` 为首个任务，建立可以复现的“G1 仿真操作技能 → 同步数据 → 冻结世界模型 → Agent 对照实验”研究链路。论文级结论必须来自配对、多初态实验；模块存在、单次成功或训练损失下降都不构成效果证据。
 
-仓库当前已有程序化工作台、RGB 相机、固定底座 G1、视觉/RSSM 与状态动力学训练入口、技能注册器、任务图运行时、MuJoCo 任务验收及运行日志。当前 G1 操作资产没有手指关节或可控夹爪；`stack_block` 场景尚未连接操作控制器、世界模型和物理任务成功判据。已有双关节 Agent 与固定控制器不等于抓取技能。
+仓库已有程序化工作台、RGB 相机、固定底座 G1、视觉/RSSM 与状态动力学训练入口、技能注册器、任务图运行时、MuJoCo 任务验收及运行日志。M1 已在 `stack_block` 专用场景加入明确标注的平行夹爪代理，完成单一会话物理步进、真值隔离、有限 waypoint 技能、独立堆叠判定、显式 reset 和无模型基线。其 79/80 成功率只覆盖当前测试的抖动初态族；代理不等价于真实手部。已有双关节 Agent 与固定控制器也不等于通用抓取技能。
 
 本设计采用固定底座单臂、单个方块的先导设置。已通过 MuJoCo 位置可达性探针确认：当前工作台在机器人正前方时，现有 G1 固定姿态下左臂无法到达方块；首个 `stack_block` 专用工作台因此移至机器人左侧可达区域，其他工作台任务布局保持原样。先用可控的平行夹爪**仿真代理**验证接口与流程；代理只代表简化抓手，不冒称 Dex1 资产或真实手部动力学。操作臂使用现有 G1 关节执行器，以固定、可复现的关节空间轨迹执行技能。若真实 G1 手部资产/驱动被选为最终研究资产，应单独替换代理并重做基线、采集、校准和评估。
 
 ## 2. 研究阶段、里程碑与 issue 拆分
 
-issue 编号是建议标签，尚未创建到外部跟踪系统。
+阶段 issue 已在 GitHub 建立，映射见本文末尾。当前以 issue 标题前缀分组；连接器没有原生 Milestone 创建接口，浏览器会话未登录，因此 M2/M3/M4 原生 Milestone 尚未创建。
 
 ### 阶段一：无世界模型的技能基线
 
@@ -64,24 +64,26 @@ issue 编号是建议标签，尚未创建到外部跟踪系统。
 ### 3.1 观测和执行边界
 
 - `RobotObservation`：`episode_id`、单调递增 `step_id`、仿真时间、命名关节位置/速度、机器人末端位置/姿态、夹爪开口与接触/执行器状态、RGB 引用。Agent 可见状态不得包含对象真值。
-- `SceneTruth`：命名刚体位姿/速度、接触对、目标几何和 reset seed。仅供训练标签、独立验证器和审计记录；不能经普通 observation 或候选生成接口泄漏。
-- `ActionCommand`：带 schema/version、skill/action ID、命名关节目标或限速轨迹、夹爪开口目标、控制持续时间。边界拒绝 NaN/Inf、未知名称、超限值、越过预算、过期 episode/step；不静默裁剪不合法命令。
-- `ExecutionReceipt`：请求/执行动作 ID、实际执行步数与时长、逐步真实 observation 引用、限幅/接触/中断状态。结果未知或部分执行必须显式标记，禁止自动重发。
+- `SceneTruth`：命名刚体位姿/速度、接触对、目标几何；reset seed 只在 `ResetAudit` 中保存。真值仅供训练标签、独立验证器和审计记录；不能经普通 observation 或技能候选接口泄漏。
+- `ActionCommand`：带 schema/version、action ID、具名关节目标、可选夹爪目标和控制步数。边界拒绝 NaN/Inf、未知名称、关节限位外目标、越过预算、过期 episode/step；每控制步的关节 slew limit 会生效并记入 receipt。
+- `ExecutionReceipt`：请求动作 ID、实际执行步数与时长、已确认 observation、限幅事件、可选夹爪命令回执和中断/故障状态。逐步场景真值经单独的 verifier-only 查询取得。结果未知或部分执行必须显式标记，禁止自动重发。
 - 操作控制器只接受具名目标，不接受未说明语义的裸数组；环境积分由单一会话持有者驱动。
 
 ### 3.2 夹爪适配器
 
-接口最小形态：
+概念职责是夹爪能力适配；当前 MuJoCo 实现为 `GripperSpec` 与 `MuJoCoParallelGripper`（`src/wmal/robots/gripper.py`），由 `ManipulationSession` 持有并调用：
 
 ```python
-class GripperAdapter:
-    def reset(self, data) -> None: ...
-    def command(self, mode: str, *, opening_m: float, speed_m_s: float,
-                force_limit_n: float) -> GripperCommandReceipt: ...
+class MuJoCoParallelGripper:
+    def __init__(self, model, spec: GripperSpec, *, object_geom_names): ...
+    def reset(self, data) -> GripperState: ...
+    def command(self, data, mode: str, *, opening_m: float, speed_m_s: float,
+                force_limit_n: float, command_id: str | None = None) -> GripperCommandReceipt: ...
+    def advance(self, data, period_s: float) -> None: ...
     def observe(self, data) -> GripperState: ...
 ```
 
-`mode` 限定为 `open`、`close`、`hold`；目标和限制按已注册代理能力校验。`GripperState` 至少含开口、目标开口、接触状态、是否到位、执行器故障。首版的接触信号由 MuJoCo 接触对和夹爪几何计算得出，不把“已发 close”当作抓住物体。仿真代理参数需写入模型语义/manifest，改动后产生不同版本身份。
+`mode` 限定为 `open`、`close`、`hold`；目标和限制按已注册代理能力校验。`GripperState` 含实测开口、目标开口、左右接触、到位和故障。`GripperCommandReceipt.accepted` 表示目标通过能力检查并已提交，`executed` 只在父级 session action 完整执行全部请求控制步后置真；任一字段均不表示物体已被成功抓住。动作 ID 沿用父级 `ActionCommand.action_id`。首版接触信号由 MuJoCo 接触对和夹爪几何计算得出，不把“已发 close”当作抓住物体。仿真代理参数需写入模型语义/manifest，改动后产生不同版本身份。
 
 如果所选 G1 资产并无手指自由度，适配器需在场景构建时显式添加代理几何与关节；禁止伪称它们来自上游机器人资产。代理质量、摩擦、行程、力限制和接触几何均需配置化并留痕。
 
@@ -94,18 +96,22 @@ ManipulationSkillSpec(
     name, parameter_schema, precondition, execute, success_verifier,
     max_control_steps, timeout_s, allowed_joint_names, gripper_modes,
 )
+SkillCommand(name, episode_id, expected_step_id, command_id, parameters=())
+SkillRun(name, status, receipts, control_steps, evidence, verified,
+         final_observation, failure=None)
 ```
 
-- `precondition(observation, parameters)` 只读取 Agent 可见 observation；不满足即不发动作。
-- `execute(session, parameters, budget)` 只经受限 session 发动作，返回完整 receipt；不直接改 `qpos`、物体位姿或接触状态。
-- `success_verifier(initial_truth, final_truth, trace, parameters)` 独立于技能执行返回值，返回结构化判据与证据；不得由 Agent 或技能自报成功。
+- 已实现入口为 `StackBlockSkills.candidates(observation, task_state=None, profile=None)` 与 `execute(session, command, budget, *, cancel_event=None, timeout_s=None, verifier=None) -> SkillRun`（`src/wmal/skills/manipulation_contracts.py`）。候选按固定顺序产生；技能只调用 session，不拿到 `MjData`，也不修改物体真值。
+- `precondition` 只读取 Agent 可见 observation；不满足或技能顺序不合法即不发动作。waypoint 按命名关节空间校验。
+- 一次技能执行可以包含多个 `ActionCommand`，故返回 `SkillRun.receipts` 而非单个 receipt。取消、超时、预算耗尽、部分执行和 verifier 未通过都需保留在 `status`/`failure` 中；不能把 “命令发出” 当成技能成功。
+- `ManipulationSkillSpec` 记录能力的前置条件、执行和成功验证钩子；技能是否完成仍由独立 verifier 证据判定，Agent/技能不能自报成功。
 - 任意技能必须有限步数和时间预算，支持取消与故障锁止；反馈丢失/部分执行时记账并要求显式 reset。
 
 先导技能：`move_to_pregrasp`、`grasp_block`、`lift_block`、`move_to_stack_target`、`place_block`、`retreat`。首版参数引用命名对象/区域和经过校验的 waypoint profile；世界模型只在阶段三调用，M1 的技能执行不依赖预测。
 
 ### 3.4 任务成功验证器
 
-提供纯读、独立于 Agent 的 `StackBlockVerifier`。判据参数必须有版本与单位：
+提供纯读、独立于 Agent 的 `StackBlockVerifier`（`src/wmal/skills/manipulation_verifier.py`）。正常更新返回 `tuple[PredicateReport, ...]`；episode/step 不连续、样本不完整或执行中断等 fail-closed 分支返回单个 `PredicateReport`。会话仅对属于自身的 receipt 提供该 receipt 覆盖范围内已完成物理步的 `truth_trace_for_verifier(receipt)`，调用方将该序列作为 `parameters['truth_snapshots']` 传给 verifier，以便按真实执行采样累计稳定时间。单个 truth 快照不能伪装成多步连续证据。判据参数必须有版本与单位：
 
 - `grasped`：指定方块与夹爪左右接触几何同时成立，并满足相对夹爪位姿/持续采样要求；单纯接近或单侧碰撞不算抓住。
 - `lifted`：方块中心高度高于 reset 基线阈值，连续保持指定的**已执行**控制采样；只读重复渲染不增加计数。
@@ -113,7 +119,7 @@ ManipulationSkillSpec(
 - `stacked`：目标方块与指定底块存在有效支撑接触，水平偏移、倾斜及速度满足阈值，持续稳定指定时长；从顶视位置重叠不够。
 - `failed`：预算耗尽、掉出台面、明显跌落、对象/执行状态非有限或关键 observation 丢失；按类别保存，不当成普通未成功。
 
-验证器每次更新检查 episode 连续性、真实 step 连续性和时间戳；重复/跳步/跨 episode 拒绝或清空连续保持计数。结果包含 `predicate_version`、测量值、阈值、episode/step/time、真值来源、判定和证据引用。
+验证器每次更新检查 episode 连续性、receipt 起止步、真实 step 连续性与 truth/receipt 终点一致；重复/跳步/跨 episode 拒绝或清空连续保持计数。正常路径返回 `tuple[PredicateReport, ...]`；fail-closed 路径返回单个 `PredicateReport`。报告包含 episode/step/time、版本、阈值、派生测量和失败类别；`evidence` 携带被验证对象名称、本次方块位置/姿态/速度、接触对及夹爪中心位置。`placed`/`stacked` 表示当前终态，后续动作若使堆叠失稳可撤销；跌落类失败另行输出，不折叠成普通未成功。
 
 所有数值容差先用资产尺寸、控制周期和基线可达性确定，再在验证数据上冻结；不能从最终测试反向调参。阈值需考虑 MuJoCo 求解器和接触稳定性，并通过边界测试验证。
 
@@ -121,7 +127,7 @@ ManipulationSkillSpec(
 
 `reset(seed, initial_state_profile)` 是新 episode 的唯一入口：重置 MuJoCo data、自由物体位姿/速度、机器人关节和控制器目标、夹爪开口/接触缓存、相机/渲染缓存、任务验证器计数、动作账本与事件序号；调用 forward 并按固定规则 settle。settle 期间不计任务转移或保持采样。返回初始 observation 与独立 reset audit，其中记录所有目标刚体 pose/velocity、关节/夹爪状态、sim time、seed、配置/model hash。对相同 seed/profile 重复 reset 比较快照容差；超差则该 episode 不可运行。
 
-新 episode 生成新 ID。执行异常后锁止；只能由显式 reset 开启新 episode，不能在故障旧 episode 中继续积分或重发动作。
+新 episode 生成新 ID。执行异常后锁止；只能由显式 reset 开启新 episode，不能在故障旧 episode 中继续积分或重发动作。若物理控制步完成、真值快照成功而随后 RGB observation 获取失败，session 保留该物理步的 verifier 真值、部分 receipt 和最后一条已确认 observation；若真值快照本身失败，则该步真值不可用，只保留先前快照、物理结束 step 和最后一条已确认 observation。两类故障都会锁止，禁止为恢复观测而重读传感器或重发原动作。日志需标出物理结束 step 与 `observation_complete`，训练样本只使用同 step 成对的 observation/truth。
 
 ## 4. 数据与版本化要求
 
@@ -151,3 +157,19 @@ episode trace 按 step 保存 observation 时间戳、命令目标、实际控�
 - [ ] 是否接受建议的基线先导门槛（≥90%）作为待冻结起点？
 - [ ] 技能、任务验证器和 reset 契约是否覆盖所需证据与故障边界？
 - [ ] 四阶段 issue 拆分和阶段门槛是否可用？
+
+## 8. GitHub issue 映射（2026-10-13）
+
+项目 issue 已按阶段建立。M1 已在本仓库无模型基线记录中验收；后续工作映射如下：
+
+| 阶段 | Issue | 交付与前置关系 |
+|---|---|---|
+| M2 | [#1 Freeze and qualify one bounded stack-block recovery behavior](https://github.com/KD-CHL/world-model-agent-lab/issues/1) | 先冻结一种有限恢复策略并验证有效恢复；具体定位/重抓方案待确认。 |
+| M2 | [#2 Collect a fresh recovery-rich, time-aligned stack-block dataset](https://github.com/KD-CHL/world-model-agent-lab/issues/2) | 依赖 #1，通过后才采集恢复数据。 |
+| M2 | [#3 Train, calibrate and freeze a task-relevant world model](https://github.com/KD-CHL/world-model-agent-lab/issues/3) | 依赖 #2；验证集选型、独立校准、新的盲测集。 |
+| M3 | [#4 Run paired A0–A3 world-model decision experiments](https://github.com/KD-CHL/world-model-agent-lab/issues/4) | 依赖 #3 模型门通过；同初态配对且同预算。 |
+| M4 | [#5 Validate the frozen protocol on a second rigid-object task](https://github.com/KD-CHL/world-model-agent-lab/issues/5) | 依赖 M3 协议和冻结评估流程通过；第二刚体任务须单独验收。 |
+| M4 | [#6 Close the ROS 2 simulation loop with fault-injection evidence](https://github.com/KD-CHL/world-model-agent-lab/issues/6) | 依赖冻结接口及 M3 门通过，并需可用 ROS 2 环境；端到端回执与故障注入。 |
+| M4 | [#7 Run a supervised low-speed sim-to-real pilot on G1](https://github.com/KD-CHL/world-model-agent-lab/issues/7) | 依赖仿真门、ROS 2 闭环门、独立安全审查和可用匹配真机；仿真结果不替代真机结论。 |
+
+这些 issue 的标题前缀用于阶段分组；当前连接器没有创建 GitHub 原生 Milestone 的接口，但 `github_update_issue` 可将 issue 指派给已存在的 Milestone。浏览器会话未登录且仓库尚无可指派 Milestone，因此 M2/M3/M4 原生 Milestone 尚未创建；M1 保留为已完成记录。

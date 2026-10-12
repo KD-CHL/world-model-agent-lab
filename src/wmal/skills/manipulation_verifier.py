@@ -80,14 +80,16 @@ class StackBlockVerifier:
             self.initial_z = truth.object(object_name).position[2]
             self.failed = True
             self.failure_reason = 'episode_changed'
-            return self._report(truth, 'sequence', False, 'episode_changed')
+            return self._report(truth, 'sequence', False, 'episode_changed',
+                                object_name=object_name)
         if (receipt.start_step_id != self.last_step_id or receipt.end_step_id < receipt.start_step_id
                 or receipt.executed_steps != receipt.end_step_id - receipt.start_step_id
                 or truth.step_id != receipt.end_step_id):
             self.stable_count = 0
             self.failed = True
             self.failure_reason = 'receipt_gap_or_mismatch'
-            return self._report(truth, 'sequence', False, 'receipt_gap_or_mismatch')
+            return self._report(truth, 'sequence', False, 'receipt_gap_or_mismatch',
+                                object_name=object_name)
         snapshots = parameters.get('truth_snapshots')
         observations = getattr(receipt, 'observations', ())
         if (receipt.executed_steps > 1 and snapshots is None
@@ -97,14 +99,17 @@ class StackBlockVerifier:
             self.stable_count = 0
             self.failed = True
             self.failure_reason = 'missing_or_noncontiguous_execution_samples'
-            return self._report(truth, 'sequence', False, 'missing_or_noncontiguous_execution_samples')
+            return self._report(truth, 'sequence', False,
+                                'missing_or_noncontiguous_execution_samples',
+                                object_name=object_name)
         if snapshots is not None:
             if len(snapshots) != receipt.executed_steps or any(
                     item.step_id != receipt.start_step_id + i + 1 for i, item in enumerate(snapshots)):
                 self.stable_count = 0
                 self.failed = True
                 self.failure_reason = 'noncontiguous_truth_samples'
-                return self._report(truth, 'sequence', False, 'noncontiguous_truth_samples')
+                return self._report(truth, 'sequence', False, 'noncontiguous_truth_samples',
+                                    object_name=object_name)
             stream = snapshots
         else:
             stream = (truth,)
@@ -112,7 +117,8 @@ class StackBlockVerifier:
             self.stable_count = 0
             self.failed = True
             self.failure_reason = 'incomplete_or_faulted_receipt'
-            return self._report(truth, 'execution', False, 'incomplete_or_faulted_receipt')
+            return self._report(truth, 'execution', False, 'incomplete_or_faulted_receipt',
+                                object_name=object_name)
 
         reports = []
         drop_samples = []
@@ -123,7 +129,8 @@ class StackBlockVerifier:
             if not all(isfinite(value) for value in state_values):
                 self.failed = True
                 self.failure_reason = 'nonfinite_object_state'
-                return self._report(sample, 'failed', True, self.failure_reason)
+                return self._report(sample, 'failed', True, self.failure_reason,
+                                    object_name=object_name)
             left_name = parameters.get('left_finger_geom', 'g1_0_stack_gripper_left_finger_geom')
             right_name = parameters.get('right_finger_geom', 'g1_0_stack_gripper_right_finger_geom')
             bilateral = (self._has_contact(sample, object_name + '_geom', left_name)
@@ -171,30 +178,44 @@ class StackBlockVerifier:
             self.stacked = self.placed
         self.last_step_id = receipt.end_step_id
         reports.extend((self._report(truth, 'grasped', self.grasped,
-                                     None if self.grasped else 'bilateral_finger_contact_missing'),
+                                     None if self.grasped else 'bilateral_finger_contact_missing',
+                                     object_name=object_name),
                         self._report(truth, 'lifted', self.lifted,
-                                     None if self.lifted else 'object_not_raised_after_grasp'),
+                                     None if self.lifted else 'object_not_raised_after_grasp',
+                                     object_name=object_name),
                         self._report(truth, 'placed', self.placed,
-                                     None if self.placed else 'stable_support_contact_not_observed'),
+                                     None if self.placed else 'stable_support_contact_not_observed',
+                                     object_name=object_name),
                         self._report(truth, 'stacked', self.stacked,
-                                     None if self.stacked else 'stable_stack_not_observed')))
+                                     None if self.stacked else 'stable_stack_not_observed',
+                                     object_name=object_name)))
         reports.extend(self._report(sample, 'failed', True, reason,
-                                     drop_count=drop_count)
+                                     drop_count=drop_count, object_name=object_name)
                        for sample, reason, drop_count in drop_samples)
         return tuple(reports)
 
-    def _report(self, truth, predicate, passed, failure, *, drop_count=None):
+    def _report(self, truth, predicate, passed, failure, *, drop_count=None,
+                object_name='block_0'):
         try:
-            obj = truth.object('block_0')
-            measurements = (('object_z_m', obj.position[2]),
+            obj = truth.object(object_name)
+            measurements = (('object_name', object_name),
+                            ('object_z_m', obj.position[2]),
                             ('initial_z_m', self.initial_z),
                             ('height_above_reset_m', obj.position[2] - self.initial_z),
                             ('linear_speed_m_s', sum(v*v for v in obj.linear_velocity) ** .5),
                             ('drop_consecutive_samples', (self.drop_count if drop_count is None
                                                           else drop_count)),
                             ('stable_samples', self.stable_count))
+            evidence = (('object_name', object_name),
+                        ('object_position_m', obj.position),
+                        ('object_quaternion_wxyz', obj.quaternion_wxyz),
+                        ('object_linear_velocity_m_s', obj.linear_velocity),
+                        ('object_angular_velocity_rad_s', obj.angular_velocity),
+                        ('contacts', truth.contacts),
+                        ('gripper_site_position_m', truth.gripper_site_position))
         except (AttributeError, KeyError):
             measurements = ()
+            evidence = ()
         return PredicateReport(predicate, bool(passed), truth.episode_id, truth.step_id,
             truth.sim_time_s, self.VERSION,
             (('target_xy_tolerance_m', self.target_xy_tolerance_m),
@@ -206,4 +227,4 @@ class StackBlockVerifier:
              ('lift_stable_samples', self.lift_stable_samples),
              ('stable_samples', self.stable_samples),
              ('drop_reset_tolerance_m', self.drop_reset_tolerance_m),
-             ('drop_stable_samples', self.drop_stable_samples)), measurements, (), failure)
+             ('drop_stable_samples', self.drop_stable_samples)), measurements, evidence, failure)

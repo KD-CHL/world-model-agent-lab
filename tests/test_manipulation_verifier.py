@@ -26,6 +26,34 @@ def receipt(start,end,episode='e1',interrupted=False):
 
 
 class StackBlockVerifierTests(unittest.TestCase):
+    def test_predicate_report_carries_scene_evidence_for_its_decision(self):
+        verifier=StackBlockVerifier()
+        verifier.update(make_truth(0),receipt(-1,0))
+        truth=make_truth(1,bilateral=True)
+        reports=verifier.update(truth,receipt(0,1))
+        grasped=next(r for r in reports if r.predicate=='grasped')
+        self.assertTrue(grasped.passed)
+        self.assertIn(('object_position_m',(.08,.42,.815)),grasped.evidence)
+        self.assertIn(('gripper_site_position_m',(.08,.42,.815)),grasped.evidence)
+        self.assertIn(('contacts',truth.contacts),grasped.evidence)
+
+    def test_evidence_tracks_the_object_named_by_verifier_parameters(self):
+        verifier=StackBlockVerifier()
+        initial=make_truth(0)
+        verifier.update(initial,receipt(-1,0),{'object_name':'block_2'})
+        block2=ObjectTruth('block_2',(-.16,1.05,.815),(1.,0.,0.,0.),
+                           (0.,0.,0.),(0.,0.,0.))
+        contacts=(('block_2_geom','g1_0_stack_gripper_left_finger_geom'),
+                  ('block_2_geom','g1_0_stack_gripper_right_finger_geom'))
+        truth=SceneTruth('e1',1,.02,(
+            initial.object('block_0'),initial.object('block_1'),block2),contacts,
+            (('stack_target',(.20,.42,.78),(.1,.1)),),(-.16,1.05,.815))
+        reports=verifier.update(truth,receipt(0,1),{'object_name':'block_2'})
+        grasped=next(r for r in reports if r.predicate=='grasped')
+        self.assertTrue(grasped.passed)
+        self.assertIn(('object_name','block_2'),grasped.evidence)
+        self.assertIn(('object_position_m',(-.16,1.05,.815)),grasped.evidence)
+
     def test_requires_bilateral_finger_contact_for_grasp(self):
         verifier=StackBlockVerifier()
         verifier.update(make_truth(0),receipt(-1,0))
