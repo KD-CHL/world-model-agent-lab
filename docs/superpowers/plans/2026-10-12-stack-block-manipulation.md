@@ -172,6 +172,8 @@ Before implementation, a MuJoCo Jacobian probe confirmed that the present forwar
 
 **M4 status:** ROS 2 real-time control and sim-to-real are not run; no physical robot or matching ROS 2 runtime was available in this workspace.
 
+**2026-10-13 gate update:** The stricter v2 score requires both a stable stack and physical target-block release. A fresh no-model jittered pilot on seeds 30000–30039 passed 40/40 under this score, so M1 clears its initial-state-family gate. On a harder disturbed family, the fixed-waypoint reference passed 42/60 and strict pre-release candidate v4 passed 39/60 on matched seeds; v4 remains development-only. A 200-episode synchronized RGB/state/action/object dataset was collected with disjoint 120/20/20/40 splits. Two CUDA ensemble candidates completed training, but selected exploratory v6 failed manipulated-block position, event Brier, and 80% nominal object-coverage gates on a once-used 40-episode test. No world-model checkpoint or recovery policy is frozen for A2/A3. The detailed score, hashes, and test limitations are in `docs/20_stack_block_experiment_progress.md`. M3 awaits a passing frozen model and equal-budget paired policy study. M4 still awaits ROS 2 closed-loop and physical/sim-to-real evidence.
+
 ## Execution Notes
 
 - Use a dedicated Git worktree for implementation; do not mix with any pre-existing user changes in the primary checkout.

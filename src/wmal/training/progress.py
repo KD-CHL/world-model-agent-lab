@@ -2,13 +2,31 @@
 import sys
 
 
+class _DisabledProgressBar:
+    """Drop-in context for training callers when progress output is disabled."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def set_postfix(self, *args, **kwargs):
+        return None
+
+    def update(self, n=1):
+        return None
+
+
 def progress_bar(total, description, *, enabled=False, unit='batch', initial=0, position=0, leave=True):
+    if not enabled:
+        return _DisabledProgressBar()
     from tqdm import tqdm
     # Cursor-up nesting is useful in a terminal, but corrupts redirected plain logs.
     if not sys.stderr.isatty():
         position=0
     return tqdm(total=total,initial=initial,desc=description,unit=unit,
-                disable=not enabled,file=sys.stderr,dynamic_ncols=True,ascii=True,
+                file=sys.stderr,dynamic_ncols=True,ascii=True,
                 mininterval=.25,position=position,leave=leave,
                 bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} '
                            '[{elapsed}, ETA {remaining}]{postfix}')

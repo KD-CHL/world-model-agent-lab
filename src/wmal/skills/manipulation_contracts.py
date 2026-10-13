@@ -100,6 +100,7 @@ class SkillRun:
     verified: bool
     final_observation: object
     failure: str | None = None
+    details: object = None
 
 
 @dataclass
@@ -177,7 +178,8 @@ class StackBlockSkills:
                                         if run.final_observation is not None
                                         else command.expected_step_id)
 
-    def execute(self, session, command, budget, *, cancel_event=None, timeout_s=None, verifier=None):
+    def execute(self, session, command, budget, *, cancel_event=None, timeout_s=None,
+                verifier=None, pre_release_alignment=None, pre_release_anchor=None):
         if not isinstance(command, SkillCommand) or command.name not in SKILL_ORDER:
             raise ValueError('Unknown skill command')
         if type(budget) is not int or budget < 1:
@@ -200,6 +202,40 @@ class StackBlockSkills:
         self._consumed.add(command.command_id)
         start = monotonic()
         self.profile.validate_for(session)
+        if command.name != 'place_block' and (
+                pre_release_alignment is not None or pre_release_anchor is not None):
+            raise ValueError('Pre-release alignment can only be used for place_block')
+        if ((pre_release_alignment is None) != (pre_release_anchor is None)):
+            raise ValueError('Pre-release alignment requires both a controller and grasp anchor')
+        receipts, used = [], 0
+        alignment_details = None
+        aligned_release = False
+        if pre_release_alignment is not None:
+            release_reserve = 256
+            alignment_budget = min(
+                int(getattr(pre_release_alignment, 'max_control_steps', 0)),
+                budget - release_reserve)
+            if alignment_budget < 1:
+                return SkillRun(command.name, 'budget_exhausted', (), 0, (), False,
+                                session.observe(), 'control_step_budget_exhausted')
+            alignment = pre_release_alignment.execute(
+                session, pre_release_anchor,
+                budget_control_steps=alignment_budget, cancel_event=cancel_event)
+            receipts.extend(alignment.receipts)
+            used += alignment.control_steps
+            alignment_details = alignment.to_dict()
+            if alignment.status != 'ready_to_release':
+                alignment_evidence = tuple(
+                    verifier(alignment.receipts, command.name)
+                    if verifier is not None and alignment.receipts else ())
+                status = ('cancelled' if alignment.status == 'cancelled' else
+                          'budget_exhausted' if alignment.reason == 'control_step_budget_insufficient'
+                          else 'failed')
+                return SkillRun(command.name, status, tuple(receipts), used,
+                                alignment_evidence,
+                                False, alignment.final_observation,
+                                alignment.reason, {'placement_alignment': alignment_details})
+            aligned_release = True
         phases = {
             'move_to_pregrasp': (('clearance',None),('cross_edge',None),('pregrasp',None)),
             'grasp_block': (('grasp',None),('grasp','close')),
@@ -208,13 +244,19 @@ class StackBlockSkills:
             'move_to_stack_target': (('transport',None),),
             # Reach the support while holding, release at the final pose, then
             # leave a settle window for independent stability checks.
-            'place_block': (('place',None),('place','open'),('place',None)),
+            'place_block': ((('place','open'),('place',None)) if aligned_release else
+                            (('place',None),('place','open'),('place',None))),
         }[command.name]
-        receipts, used = [], 0
         try:
             for waypoint, grip in phases:
                 current = session.observe()
                 target = self.profile.points[waypoint]
+                if aligned_release:
+                    # The Cartesian controller already put the tool at the
+                    # computed pose. Hold its current actuator targets while
+                    # opening and settling instead of returning to the fixed
+                    # joint waypoint.
+                    target = session.actuator_targets_for(LEFT_ARM_JOINTS)
                 current_map = dict(zip(current.joint_names, current.joint_position))
                 # Calibrated waypoints were settled for a full 128 control
                 # cycles; reproduce that fixed duration to match their pose.
@@ -229,8 +271,8 @@ class StackBlockSkills:
                     chunk=min(128,steps,budget-used)
                     action=ActionCommand(current.episode_id,current.step_id,
                         f'{command.command_id}:{waypoint}:{len(receipts)}',target,chunk,grip,
-                        session._gripper_spec.max_opening_m if grip == 'open' else .074,.04,
-                        session._gripper_spec.max_force_n)
+                        session.gripper_spec.max_opening_m if grip == 'open' else .074,.04,
+                        session.gripper_spec.max_force_n)
                     receipt=session.execute(action); receipts.append(receipt); used+=receipt.executed_steps
                     if receipt.interrupted or receipt.executed_steps != chunk:
                         # A failed feedback read is latched by the session. Do not
@@ -263,7 +305,9 @@ class StackBlockSkills:
             status=('executed' if verified and transit else
                     'succeeded' if verified else 'success_unverified')
             run=SkillRun(command.name,status,tuple(receipts),used,evidence,verified,final,
-                         None if verified else 'independent_predicate_not_passed')
+                         None if verified else 'independent_predicate_not_passed',
+                         ({'placement_alignment': alignment_details}
+                          if alignment_details is not None else None))
             if verified:
                 self.task_state.completed.add(command.name); self.task_state.last_step_id=final.step_id
             return run

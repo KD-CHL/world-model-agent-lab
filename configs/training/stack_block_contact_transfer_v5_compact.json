@@ -1,0 +1,23 @@
+{
+  "epochs": 6,
+  "members": 3,
+  "batch_size": 128,
+  "horizon": 4,
+  "latent_dim": 32,
+  "hidden_dim": 64,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.00001,
+  "frame_weight": 1.0,
+  "state_weight": 1.0,
+  "latent_weight": 0.05,
+  "event_weight": 0.2,
+  "object_weight": 1.0,
+  "object_observation_weight": 1.0,
+  "object_state_mode": "residual",
+  "change_weight": 4.0,
+  "gradient_clip": 5.0,
+  "seed": 2725,
+  "device": "cuda",
+  "threads": 1,
+  "window_stride": 32
+}

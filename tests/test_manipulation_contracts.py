@@ -1,9 +1,12 @@
 import threading
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from wmal.envs.manipulation_session import LEFT_ARM_JOINTS, ManipulationSession
 from wmal.skills.manipulation_contracts import (
-    ManipulationSkillSpec, SkillRun, StackBlockSkills, WaypointProfile,
+    ManipulationSkillSpec, SkillCommand, SkillRun, StackBlockSkills,
+    WaypointProfile,
 )
 
 
@@ -91,6 +94,44 @@ class ManipulationContractTests(unittest.TestCase):
         self.assertEqual(self.session.sim_time_s, 0.0)
         with self.assertRaises(TimeoutError):
             self.skills.execute(self.session, command, budget=120, timeout_s=.0001)
+        self.assertEqual(self.session.sim_time_s, 0.0)
+
+    def test_failed_alignment_still_verifies_executed_receipts_without_releasing(self):
+        observation = self.session.observe()
+        command = SkillCommand(
+            'place_block', observation.episode_id, observation.step_id,
+            'place-after-failed-alignment')
+        alignment_receipt = object()
+        stacked_report = SimpleNamespace(predicate='stacked', passed=True)
+
+        class FailedAlignment:
+            max_control_steps = 128
+
+            def execute(self, session, _anchor, *, budget_control_steps,
+                        cancel_event=None):
+                self.budget = budget_control_steps
+                self.cancel_event = cancel_event
+                return SimpleNamespace(
+                    status='failed', reason='alignment_not_converged',
+                    receipts=(alignment_receipt,), control_steps=0,
+                    final_observation=session.observe(), to_dict=lambda: {})
+
+        alignment = FailedAlignment()
+        verifier_calls = []
+
+        def verifier(receipts, skill_name):
+            verifier_calls.append((receipts, skill_name))
+            return (stacked_report,)
+
+        with patch.object(self.skills, 'candidates', return_value=(command,)):
+            run = self.skills.execute(
+                self.session, command, budget=300,
+                pre_release_alignment=alignment, pre_release_anchor={},
+                verifier=verifier)
+
+        self.assertEqual(verifier_calls, [((alignment_receipt,), 'place_block')])
+        self.assertEqual(run.evidence, (stacked_report,))
+        self.assertEqual(run.status, 'failed')
         self.assertEqual(self.session.sim_time_s, 0.0)
 
     def test_skill_dispatch_uses_bounded_session_receipts_and_unique_action_ids(self):

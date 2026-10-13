@@ -275,6 +275,11 @@ class ManipulationSession:
     def episode_id(self):
         return self._episode_id
 
+    @property
+    def gripper_spec(self):
+        """Return the immutable gripper limits and command parameters."""
+        return self._gripper_spec
+
     def reset(self, seed, initial_state_profile='nominal'):
         if type(seed) is not int or seed < 0:
             raise ValueError('reset seed must be a nonnegative integer')
@@ -374,6 +379,53 @@ class ManipulationSession:
             gripper=self._gripper.observe(self._data), rgb=rgb)
         self._last_observation = observation
         return observation
+
+    def tool_pose_jacobian(self):
+        """Return the current gripper-site pose Jacobian for the left arm.
+
+        The result maps measured left-arm joint velocity to world-frame tool
+        linear and angular velocity. It is a kinematic control aid only; motion
+        still has to be dispatched through :meth:`execute` and checked against
+        a fresh observation.
+        """
+        if self._episode_id is None:
+            raise RuntimeError('Session must be reset before reading the tool Jacobian')
+        jacobian_position = np.zeros((3, self._model.nv), dtype=np.float64)
+        jacobian_rotation = np.zeros((3, self._model.nv), dtype=np.float64)
+        self._mj.mj_jacSite(self._model, self._data, jacobian_position,
+                            jacobian_rotation, self._gripper_site_id)
+        dof_ids = tuple(int(self._model.jnt_dofadr[self._joint_ids[name]])
+                        for name in LEFT_ARM_JOINTS)
+        rows = np.vstack((jacobian_position[:, dof_ids], jacobian_rotation[:, dof_ids]))
+        if not np.isfinite(rows).all():
+            raise RuntimeError('Tool Jacobian contains nonfinite values')
+        return tuple(tuple(float(value) for value in row) for row in rows)
+
+    def joint_limits_for(self, joint_names):
+        """Return validated joint limits for the manipulation allowlist."""
+        names = tuple(joint_names)
+        if (not names or len(set(names)) != len(names)
+                or not set(names) <= set(LEFT_ARM_JOINTS)):
+            raise ValueError('Joint limit query exceeds the left-arm allowlist')
+        return {name: self._joint_limits[name] for name in names}
+
+    def actuator_targets_for(self, joint_names):
+        """Return current position-actuator targets for the left-arm allowlist.
+
+        In this workcell the position target can differ from the measured joint
+        angle at static equilibrium. Feedback controllers should add desired
+        joint changes to this target so updates preserve the actuator effort
+        supporting the measured pose.
+        """
+        names = tuple(joint_names)
+        if (not names or len(set(names)) != len(names)
+                or not set(names) <= set(LEFT_ARM_JOINTS)):
+            raise ValueError('Actuator target query exceeds the left-arm allowlist')
+        targets = {name: float(self._data.ctrl[self._actuator_ids[name]])
+                   for name in names}
+        if not np.isfinite(tuple(targets.values())).all():
+            raise RuntimeError('Position actuator target is nonfinite')
+        return targets
 
     def truth_for_verifier(self):
         if self._episode_id is None:

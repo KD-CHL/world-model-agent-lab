@@ -31,6 +31,27 @@ def _average_ranks(values):
     return ranks
 
 
+def _rank_correlation(first, second):
+    """Pearson correlation of rank vectors without invoking a BLAS backend."""
+    first=tuple(float(value) for value in first)
+    second=tuple(float(value) for value in second)
+    if len(first)!=len(second):
+        raise ValueError('Rank vectors must have the same length')
+    if not first or not all(math.isfinite(value) for value in first+second):
+        return None
+    first_mean=math.fsum(first)/len(first)
+    second_mean=math.fsum(second)/len(second)
+    first_centered=tuple(value-first_mean for value in first)
+    second_centered=tuple(value-second_mean for value in second)
+    first_ss=math.fsum(value*value for value in first_centered)
+    second_ss=math.fsum(value*value for value in second_centered)
+    denominator=math.sqrt(first_ss*second_ss)
+    if denominator==0:
+        return None
+    covariance=math.fsum(a*b for a,b in zip(first_centered,second_centered))
+    return covariance/denominator
+
+
 def _event_sample_scores(probabilities, targets, target_mask, origin, origin_mask):
     """Score event prediction and persistence only where the origin label is known."""
     probabilities = np.asarray(probabilities)
@@ -563,9 +584,7 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         errors=np.concatenate(event_actual_error)
         uncertainty=np.concatenate(event_uncertainty)
         error_ranks,uncertainty_ranks=_average_ranks(errors),_average_ranks(uncertainty)
-        rank_correlation=(float(np.corrcoef(error_ranks,uncertainty_ranks)[0,1])
-                          if errors.size and np.std(error_ranks)>0
-                          and np.std(uncertainty_ranks)>0 else None)
+        rank_correlation=_rank_correlation(error_ranks,uncertainty_ranks) if errors.size else None
         brier_by_horizon, scored_windows, scored_labels = _masked_horizon_mean(event_brier,event_masks)
         persistence_by_horizon, _, _ = _masked_horizon_mean(event_persistence_brier,event_masks)
         accuracy_by_horizon, _, _ = _masked_horizon_mean(event_accuracy,event_masks)
@@ -600,8 +619,7 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         errors=np.concatenate(object_actual_error)
         uncertainty=np.concatenate(object_uncertainty)
         error_ranks,uncertainty_ranks=_average_ranks(errors),_average_ranks(uncertainty)
-        correlation=(float(np.corrcoef(error_ranks,uncertainty_ranks)[0,1])
-                     if np.std(error_ranks)>0 and np.std(uncertainty_ranks)>0 else None)
+        correlation=_rank_correlation(error_ranks,uncertainty_ranks)
         report['object_state_metrics']={
             'state_order':model.semantics['object_state_order'],
             'normalized_rmse_by_horizon':np.sqrt(np.mean(object_error,0)).tolist(),

@@ -14,6 +14,7 @@ from wmal.logging.manifest import sha256_file
 from wmal.envs.g1_locomotion import JOINT_NAMES
 from wmal.envs.manipulation_session import LEFT_ARM_JOINTS
 from wmal.envs.workcell import STACK_WORKCELL_CAMERA_FOVY_DEG
+from wmal.skills.manipulation_recovery import StackBlockRGBXYPreReleaseAlignment
 from wmal.skills.manipulation_verifier import StackBlockVerifier
 from stack_block_baseline import load_config, run_episode
 
@@ -163,24 +164,111 @@ class EpisodeBuffer:
         return np.stack(self.rgb), states, actions, events, event_mask, extra
 
 
+def _episode_split_labels(episode_count, split_seed):
+    """Assign reproducible 60/10/10/20 splits after shuffling episode indices."""
+    if type(episode_count) is not int or episode_count < 4:
+        raise ValueError('At least four episodes are required for four-way splits')
+    if type(split_seed) is not int or split_seed < 0:
+        raise ValueError('split_seed must be a nonnegative integer')
+    n_validation = max(1, int(episode_count * .10))
+    n_calibration = max(1, int(episode_count * .10))
+    n_train = min(max(1, int(episode_count * .60)),
+                  episode_count - n_validation - n_calibration - 1)
+    labels = (['train'] * n_train + ['validation'] * n_validation
+              + ['calibration'] * n_calibration
+              + ['test'] * (episode_count - n_train - n_validation - n_calibration))
+    order = np.random.default_rng(split_seed).permutation(episode_count)
+    assigned = [''] * episode_count
+    for index, label in zip(order, labels):
+        assigned[int(index)] = label
+    return tuple(assigned)
+
+
 def collect(config_path, output_dir, *, seed_start, episode_count, profile, image_size=128,
-            recovery_policy='none'):
+            recovery_policy='none', recovery_checkpoint=None,
+            recovery_calibration=None, recovery_device='cpu',
+            recovery_max_control_steps=2048, placement_policy='fixed_waypoint',
+            placement_checkpoint=None, placement_calibration=None,
+            placement_device='cpu', placement_max_control_steps=512,
+            placement_contact_loss_hold_steps=0):
     config = load_config(config_path)
     if type(seed_start) is not int or seed_start < 0 or type(episode_count) is not int or episode_count < 4:
         raise ValueError('Use a nonnegative seed start and at least four episodes for four-way splits')
     config['initial_state_profile'] = profile
-    if recovery_policy not in ('none', 'repeat_place_once'):
+    if recovery_policy not in ('none', 'repeat_place_once', 'rgbxy_regrasp_once'):
         raise ValueError('Unsupported recovery policy')
+    if (type(placement_contact_loss_hold_steps) is not int
+            or not 0 <= placement_contact_loss_hold_steps <= 256):
+        raise ValueError('Placement contact-loss hold must be in [0, 256] steps')
+    if placement_policy == 'fixed_waypoint' and placement_contact_loss_hold_steps:
+        raise ValueError('Placement contact-loss hold requires the RGB-XY pre-release policy')
+    recovery_localizer = None
+    recovery_artifact = None
+    if recovery_policy == 'rgbxy_regrasp_once':
+        if not recovery_checkpoint or not recovery_calibration:
+            raise ValueError('rgbxy_regrasp_once requires checkpoint and calibration paths')
+        from wmal.perception.rgb_xy_regressor import RGBBlockXYLocalizer
+        recovery_localizer = RGBBlockXYLocalizer(
+            recovery_checkpoint, device=recovery_device,
+            calibration_path=recovery_calibration)
+        if image_size != recovery_localizer.metadata.image_size:
+            raise ValueError('Collector image_size must match the frozen recovery model')
+        if config['max_episode_steps'] < 1536 + recovery_max_control_steps:
+            raise ValueError('Recovery config must budget the baseline plus one bounded attempt')
+        recovery_artifact = {
+            'model_version': recovery_localizer.metadata.model_version,
+            'checkpoint_sha256': recovery_localizer.checkpoint_sha256,
+            'visual_domain_sha256': recovery_localizer.metadata.visual_domain_sha256,
+            'calibrated_radius_m': recovery_localizer.calibration['radius_m'],
+            'calibration_scope': recovery_localizer.calibration['scope'],
+            'calibration_sha256': sha256_file(recovery_calibration),
+            'device': recovery_device,
+        }
+    elif recovery_checkpoint or recovery_calibration:
+        raise ValueError('Recovery artifacts require rgbxy_regrasp_once')
+    placement_localizer = None
+    placement_artifact = None
+    if placement_policy == StackBlockRGBXYPreReleaseAlignment.POLICY_ID:
+        if not placement_checkpoint or not placement_calibration:
+            raise ValueError('RGB-XY placement collection requires a frozen RGB-XY localizer and calibration')
+        if recovery_policy != 'none' or recovery_localizer is not None:
+            raise ValueError('Pre-release placement collection must be separate from post-release recovery')
+        if type(placement_max_control_steps) is not int or placement_max_control_steps < 1:
+            raise ValueError('Placement control-step budget must be positive')
+        if (type(placement_contact_loss_hold_steps) is not int
+                or not 0 <= placement_contact_loss_hold_steps <= 256):
+            raise ValueError('Placement contact-loss hold must be in [0, 256] steps')
+        if config['max_episode_steps'] < (1536 + placement_max_control_steps
+                                          + placement_contact_loss_hold_steps + 256):
+            raise ValueError('Placement config must budget alignment, release, and settle')
+        from wmal.perception.rgb_xy_regressor import RGBBlockXYLocalizer
+        placement_localizer = RGBBlockXYLocalizer(
+            placement_checkpoint, device=placement_device,
+            calibration_path=placement_calibration)
+        if image_size != placement_localizer.metadata.image_size:
+            raise ValueError('Collector image_size must match the frozen placement model')
+        placement_artifact = {
+            'policy': placement_policy,
+            'model_version': placement_localizer.metadata.model_version,
+            'checkpoint_sha256': placement_localizer.checkpoint_sha256,
+            'visual_domain_sha256': placement_localizer.metadata.visual_domain_sha256,
+            'calibrated_radius_m': placement_localizer.calibration['radius_m'],
+            'calibration_scope': placement_localizer.calibration['scope'],
+            'calibration_sha256': sha256_file(placement_calibration),
+            'device': placement_device,
+            'max_control_steps': placement_max_control_steps,
+        }
+    elif placement_policy != 'fixed_waypoint':
+        raise ValueError('Unsupported placement policy')
+    elif placement_checkpoint or placement_calibration:
+        raise ValueError('Placement artifacts require the RGB-XY pre-release policy')
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=False)
     raw_root, data_root = output / 'raw_runs', output / 'episodes'
     raw_root.mkdir()
     data_root.mkdir()
     rows = []
-    n_validation = max(1, int(episode_count * .10))
-    n_calibration = max(1, int(episode_count * .10))
-    n_train = min(max(1, int(episode_count * .60)),
-                  episode_count - n_validation - n_calibration - 1)
+    split_labels = _episode_split_labels(episode_count, seed_start)
     for i in range(episode_count):
         seed = seed_start + i
         config['seeds'] = [seed]
@@ -190,18 +278,24 @@ def collect(config_path, output_dir, *, seed_start, episode_count, profile, imag
         buffer = EpisodeBuffer()
         result = run_episode(config, seed, raw_run, render=True, render_image_size=image_size,
                              on_reset=buffer.reset, on_step=buffer.step,
-                             recovery_policy=recovery_policy)
+                             recovery_policy=recovery_policy,
+                             recovery_localizer=recovery_localizer,
+                             recovery_max_control_steps=recovery_max_control_steps,
+                             placement_policy=placement_policy,
+                             placement_localizer=placement_localizer,
+                             placement_max_control_steps=placement_max_control_steps,
+                             placement_contact_loss_hold_steps=(
+                                 placement_contact_loss_hold_steps))
         rgb, states, actions, events, mask, extra = buffer.arrays()
         episode_file = data_root / f'episode_{seed:06d}.npz'
         write_episode(episode_file, rgb, states, actions, events=events,
                       event_mask=mask, extra_arrays=extra)
-        split = ('train' if i < n_train else
-                 'validation' if i < n_train + n_validation else
-                 'calibration' if i < n_train + n_validation + n_calibration else 'test')
+        split = split_labels[i]
         rows.append({'episode_id': result['episode_id'], 'split': split,
                      'path': f'episodes/{episode_file.name}', 'seed': seed,
                      'initial_state_profile': profile, 'task_success': result['success'],
                      'failure_cause': result['failure_cause'],
+                     'placement_policy': placement_policy,
                      'recovery_policy': recovery_policy,
                      'recovery_attempts': result['recovery_attempts'],
                      'recovery_succeeded': result['recovery_succeeded']})
@@ -211,7 +305,9 @@ def collect(config_path, output_dir, *, seed_start, episode_count, profile, imag
     code_files = ('scripts/collect_stack_block_visual.py', 'scripts/stack_block_baseline.py',
                   'src/wmal/envs/workcell.py', 'src/wmal/envs/manipulation_session.py',
                   'src/wmal/robots/gripper.py', 'src/wmal/skills/manipulation_contracts.py',
-                  'src/wmal/skills/manipulation_verifier.py')
+                  'src/wmal/skills/manipulation_verifier.py',
+                  'src/wmal/skills/cartesian_servo.py',
+                  'src/wmal/skills/manipulation_recovery.py')
     write_manifest(manifest_path, rows, action_schema='wmal.manipulation.action.v1',
                    action_order=ACTION_ORDER, state_order=STATE_ORDER,
                    camera='workcell_overview', period_s=config['control_period_s'],
@@ -219,7 +315,13 @@ def collect(config_path, output_dir, *, seed_start, episode_count, profile, imag
                    object_state_order=TRUTH_ORDER,
                    camera_fovy_deg=STACK_WORKCELL_CAMERA_FOVY_DEG,
                    source={'task': 'stack_block', 'profile': profile,
-                           'world_model': 'disabled', 'recovery_policy': recovery_policy,
+                           'split_seed': seed_start,
+                           'world_model': 'disabled', 'placement_policy': placement_policy,
+                           'placement_artifact': placement_artifact,
+                           'placement_contact_loss_hold_steps': (
+                               placement_contact_loss_hold_steps),
+                           'recovery_policy': recovery_policy,
+                           'recovery_artifact': recovery_artifact,
                            'truth_array': 'object_truth (labels only; excluded from model inputs)',
                            'code_sha256': {name: sha256_file(ROOT / name) for name in code_files}},
                    event_names=EVENT_NAMES)
@@ -236,12 +338,38 @@ def main(argv=None):
     parser.add_argument('--seed-start', type=int, default=0)
     parser.add_argument('--episodes', type=int, default=40)
     parser.add_argument('--profile', choices=('nominal', 'jittered', 'disturbed'), default='jittered')
-    parser.add_argument('--recovery-policy', choices=('none', 'repeat_place_once'), default='none')
+    parser.add_argument('--recovery-policy',
+                        choices=('none', 'repeat_place_once', 'rgbxy_regrasp_once'),
+                        default='none')
+    parser.add_argument('--recovery-checkpoint')
+    parser.add_argument('--recovery-calibration')
+    parser.add_argument('--recovery-device', default='cpu')
+    parser.add_argument('--recovery-max-control-steps', type=int, default=2048)
+    parser.add_argument('--placement-policy',
+                        choices=('fixed_waypoint',
+                                 StackBlockRGBXYPreReleaseAlignment.POLICY_ID),
+                        default='fixed_waypoint')
+    parser.add_argument('--placement-checkpoint')
+    parser.add_argument('--placement-calibration')
+    parser.add_argument('--placement-device', default='cpu')
+    parser.add_argument('--placement-max-control-steps', type=int, default=512)
+    parser.add_argument('--placement-contact-loss-hold-steps', type=int, default=0)
     parser.add_argument('--image-size', choices=(32, 64, 128), type=int, default=64)
     args = parser.parse_args(argv)
     collect(args.config, args.output_dir, seed_start=args.seed_start,
             episode_count=args.episodes, profile=args.profile,image_size=args.image_size,
-            recovery_policy=args.recovery_policy)
+            recovery_policy=args.recovery_policy,
+            recovery_checkpoint=args.recovery_checkpoint,
+            recovery_calibration=args.recovery_calibration,
+            recovery_device=args.recovery_device,
+            recovery_max_control_steps=args.recovery_max_control_steps,
+            placement_policy=args.placement_policy,
+            placement_checkpoint=args.placement_checkpoint,
+            placement_calibration=args.placement_calibration,
+            placement_device=args.placement_device,
+            placement_max_control_steps=args.placement_max_control_steps,
+            placement_contact_loss_hold_steps=(
+                args.placement_contact_loss_hold_steps))
 
 
 if __name__ == '__main__':
