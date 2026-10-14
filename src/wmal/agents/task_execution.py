@@ -89,6 +89,9 @@ class ExecutionManager:
                     status,reason = 'cooperative_stop','model_or_semantics_changed'
                     break
                 started = time.monotonic()
+                if started>=expected.deadline:
+                    status,reason = 'cooperative_stop','execution_deadline'
+                    break
                 dispatch_attempts += 1
                 returned = self.session.execute_actions(action[None],episode_id=expected.episode_id,
                                                          step_id=expected.step_id+index)

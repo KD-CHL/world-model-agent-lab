@@ -1,5 +1,9 @@
 # World Model Agent Lab
 
+新增可规模化具身世界模型：独立 PyTorch categorical RSSM、多模态观测、实测物理量/已知指令分离、动作条件开放环训练、独立成员及原始轨迹级校准；接入有时限的本地/HTTP 推理和持续 G1 Agent 会话。只使用本项目 `wmal` 环境。
+完整采集、训练、续训、微调、评估和窗口启动命令见 [可规模化世界模型指南](docs/30_scalable_embodied_world.md)，实测结果见 [验收记录](docs/architecture/embodied-world-verification.md)。
+当前新模型短训未胜过简单动力学基线，A3 拒绝了不可信执行；约150M正式模型和8×3090仍待服务器实测，不宣称完整操作任务或论文效果已经完成。
+
 Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 
 ## G1 世界模型规划研究入口
@@ -9,6 +13,11 @@ Ubuntu + MuJoCo 世界模型机器人与高层 Agent 研究项目。
 `python scripts/g1_task_agent.py`，完整命令、持续窗口和实验边界见
 [任务图 Agent 指南](docs/28_task_graph_agent.md)。当前开发任务不能等同于已学会复杂操作；
 实际完成/失败均保留在实验结果中。
+
+五节点闭环补验：冻结 RSSM 权重，增加限幅重力补偿、精确到达/稳定等待及控制器绑定的
+局部独立校准后，真实 MuJoCo 的 A3 五节点任务已通过。旧控制器仍为默认值；
+新启动命令、补验数据及仍存在的长跨度预测限制见
+[五节点修复与复现](docs/29_rssm_five_node_fix.md)。这不是世界模型优于基线的论文效果结论。
 
 新增可训练的 **RGB 动作条件视觉世界模型与可信度辅助技能 Agent**：支持真实 MuJoCo 图像采集、LeRobot AV1/parquet 对齐导入、CNN/GRU 多步集成训练、冻结编码器微调、独立 episode 校准、A0–A3 和保持打开的交互窗口。见 [架构与论文假设](docs/architecture/visual-world-agent.md)、[完整命令与输出位置](docs/23_visual_world_training_and_agent.md)、[实际验收与局限](docs/architecture/visual-world-verification.md)。当前闭环验证是 G1 两关节到达目标，不宣称操作任务/UniFoLM 大模型微调已完成。
 

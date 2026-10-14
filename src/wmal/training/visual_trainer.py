@@ -426,7 +426,8 @@ def train_visual(manifest, output_dir, config=VisualTrainingConfig(), *, pretrai
 
 
 def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibration=None,
-                    object_calibration=None, window_stride=1,split='test'):
+                    object_calibration=None, window_stride=1, split='test',
+                    allow_controller_transfer=False):
     from wmal.models.horizon_calibration import HorizonCalibration, ObjectHorizonCalibration
     if split not in ('validation','calibration','test'):
         raise ValueError('Evaluation split must be validation/calibration/test')
@@ -438,6 +439,11 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
         raise ValueError('window_stride must be a positive integer')
     if dataset.semantics!=model.semantics:
         raise ValueError('Evaluation dataset/control semantics mismatch')
+    controller=dataset.manifest.get('source',{}).get('controller_profile',{'profile':'g1_joint_pd_v1'})
+    training_source=model.metadata.get('training_source',{})
+    trained_controller=training_source.get('controller_profile',{'profile':'g1_joint_pd_v1'}) if isinstance(training_source,dict) else {'profile':'g1_joint_pd_v1'}
+    if controller!=trained_controller and not allow_controller_transfer:
+        raise ValueError('Evaluation controller transfer requires explicit --allow-controller-transfer')
     lineage=read_episode_lineage(model.metadata)
     evaluation_ids={row['episode_id'] for row in dataset.rows}
     if split=='validation':
@@ -449,10 +455,15 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
     bound_model=HorizonCalibration.load(calibration) if calibration else None
     if bound_model:
         bound_model.validate_for(model.version,model.semantics)
+        bound_model.validate_controller(controller)
+        if bound_model.prediction_scope!=dataset.manifest.get('source',{}).get('prediction_scope'):
+            raise ValueError('Evaluation/calibration deployment scope mismatch')
         if set(bound_model.episode_ids).intersection(r['episode_id'] for r in dataset.rows):
             raise ValueError('Calibration overlaps evaluation episodes')
     object_bound_model=(ObjectHorizonCalibration.load(object_calibration) if object_calibration else None)
     if object_bound_model:
+        if controller!=trained_controller:
+            raise ValueError('Object calibration has no controller provenance; cannot apply after controller transfer')
         object_bound_model.validate_for(model.version,model.semantics)
         if set(object_bound_model.episode_ids).intersection(r['episode_id'] for r in dataset.rows):
             raise ValueError('Object calibration overlaps evaluation episodes')
@@ -601,6 +612,8 @@ def evaluate_visual(manifest, checkpoint, *, horizon=4, device='cpu', calibratio
             'ensemble_spread_vs_absolute_error_spearman':rank_correlation,
         }
     report={'schema':'wmal.visual_evaluation.v1','split':split,'model_version':model.version,
+            'controller_profile':controller,'controller_transfer':controller!=trained_controller,
+            'prediction_scope':dataset.manifest.get('source',{}).get('prediction_scope'),
             'context_steps':model.config.context_steps,
             'manifest_sha256':sha256_file(manifest),'episodes':len(dataset.rows),
             'windows':len(selected_indices),'window_stride_control_steps':window_stride,

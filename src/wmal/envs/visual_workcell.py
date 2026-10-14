@@ -4,6 +4,7 @@ It exposes two bounded joint target deltas, NOT grasping or humanoid locomotion.
 The controller is fixed and never learns alongside the world model.
 """
 from uuid import uuid4
+from hashlib import sha256
 import time
 import numpy as np
 
@@ -18,11 +19,14 @@ ACTION_SCHEMA='wmal.g1.workcell.target_delta.v1'
 
 class VisualWorkcellSession:
     def __init__(self,task='stack_block',*,image_size=64,camera='workcell_overview',period_s=.2,seed=0,
-                 frame_publisher=None,realtime=False):
+                 frame_publisher=None,realtime=False,controller='legacy'):
         import mujoco
         from wmal.envs.workcell import build_workcell
         if image_size not in (32,64,128) or not np.isfinite(period_s) or period_s<=0 or period_s>1:
             raise ValueError('Invalid camera/control period')
+        if controller not in ('legacy','gravity_compensated'):
+            raise ValueError('Unknown fixed controller profile')
+        self._controller=controller
         self.mj=mujoco
         # Preserve the original joint-servo training fixture. The manipulation
         # experiment uses its separate reachable side-table layout.
@@ -38,6 +42,10 @@ class VisualWorkcellSession:
         self.aids=[mujoco.mj_name2id(self.model,mujoco.mjtObj.mjOBJ_ACTUATOR,'g1_0_'+joint+'_hold') for joint in JOINTS]
         self._qpos=self.data.qpos.copy()
         self._ctrl=self.data.ctrl.copy()
+        self._gravity_data=mujoco.MjData(self.model) if controller=='gravity_compensated' else None
+        self._servo_dofs=self.model.jnt_dofadr[self.model.actuator_trnid[:,0]].copy()
+        if controller=='gravity_compensated' and np.any(self.model.actuator_gear[:,0]!=1.):
+            raise ValueError('Gravity controller requires unit joint transmission gears')
         self.renderer=mujoco.Renderer(self.model,height=image_size,width=image_size)
         self.viewer=None
         self.frame_publisher=frame_publisher
@@ -45,6 +53,38 @@ class VisualWorkcellSession:
         self.realtime=bool(realtime)
         self.fault_reason=None
         self.reset()
+
+    @property
+    def controller_profile(self):
+        if self._controller=='legacy':
+            return {'profile':'g1_joint_pd_v1'}
+        # Exclude the dynamic bias term (feedforward), bind all fixed servo parameters.
+        digest=sha256()
+        for value in (self.model.actuator_gainprm,self.model.actuator_biasprm[:,1:],
+                      self.model.actuator_forcerange,self.model.actuator_forcelimited,
+                      self.model.actuator_gear,self.model.opt.gravity):
+            digest.update(np.ascontiguousarray(value).tobytes())
+        return {'profile':'g1_joint_pd_gravity_v2','parameters_sha256':digest.hexdigest(),
+                'feedforward':'zero_velocity_inverse_dynamics_each_physics_tick',
+                'torque_limit':'combined_position_PD_and_feedforward'}
+
+    def _step_physics(self,nstep):
+        if self._gravity_data is None:
+            self.mj.mj_step(self.model,self.data,nstep=nstep)
+            return
+        for _ in range(nstep):
+            gravity=self._gravity_data
+            gravity.qpos[:]=self.data.qpos
+            gravity.qvel[:]=0.
+            self.mj.mj_fwdPosition(self.model,gravity)
+            self.mj.mj_fwdVelocity(self.model,gravity)
+            force=gravity.qfrc_bias[self._servo_dofs]
+            if not np.isfinite(force).all():
+                raise RuntimeError('Nonfinite gravity feedforward')
+            # Position actuator affine bias is in force units. Its existing
+            # forcerange clamps PD + feedforward together; no unbounded qfrc_applied.
+            self.model.actuator_biasprm[:,0]=force
+            self.mj.mj_step(self.model,self.data)
 
     @property
     def semantics(self):
@@ -63,7 +103,7 @@ class VisualWorkcellSession:
         self.data.ctrl[self.aids]=targets
         self.mj.mj_forward(self.model,self.data)
         # Settle dynamic objects and servo without generating training transitions.
-        self.mj.mj_step(self.model,self.data,nstep=self.physics_steps)
+        self._step_physics(self.physics_steps)
         if not np.isfinite(self.data.qpos).all() or not np.isfinite(self.data.qvel).all():
             self.abort('reset_failed')
             raise RuntimeError('Nonfinite reset state; session remains locked')
@@ -112,7 +152,7 @@ class VisualWorkcellSession:
             for target in targets:
                 started=time.monotonic()
                 self.data.ctrl[self.aids]=target
-                self.mj.mj_step(self.model,self.data,nstep=self.physics_steps)
+                self._step_physics(self.physics_steps)
                 if not np.isfinite(self.data.qpos).all() or not np.isfinite(self.data.qvel).all():
                     raise RuntimeError('Nonfinite MuJoCo state; abort this session')
                 self.step_id+=1
@@ -138,7 +178,7 @@ class VisualWorkcellSession:
         """A faulted viewer can render, but cannot integrate unacknowledged motion."""
         if self.fault_reason is None:
             try:
-                self.mj.mj_step(self.model,self.data,nstep=10)
+                self._step_physics(10)
                 if not np.isfinite(self.data.qpos).all() or not np.isfinite(self.data.qvel).all():
                     raise RuntimeError('Nonfinite idle state')
             except (Exception,KeyboardInterrupt):

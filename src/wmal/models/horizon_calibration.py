@@ -19,6 +19,8 @@ class HorizonCalibration:
     episode_ids: tuple
     semantics: dict
     schema: str = 'wmal.horizon_calibration.v1'
+    controller_profile: dict | None = None
+    prediction_scope: dict | None = None
 
     def __post_init__(self):
         if (self.schema!='wmal.horizon_calibration.v1' or not self.model_version or not self.dataset_id
@@ -28,6 +30,41 @@ class HorizonCalibration:
                 or not np.isfinite(self.quantiles).all() or min(self.quantiles)<0
                 or not np.isfinite(self.state_scale).all() or min(self.state_scale)<=0):
             raise ValueError('Invalid horizon calibration')
+        if self.controller_profile is not None and (not isinstance(self.controller_profile,dict)
+                or not isinstance(self.controller_profile.get('profile'),str)
+                or not self.controller_profile['profile']):
+            raise ValueError('Invalid calibration controller provenance')
+        if self.prediction_scope is not None:
+            scope=self.prediction_scope
+            low,high=np.asarray(scope.get('command_lower')),np.asarray(scope.get('command_upper'))
+            if (low.shape!=(2,) or high.shape!=(2,) or not np.isfinite(low).all()
+                    or not np.isfinite(high).all() or np.any(low>=high)
+                    or not np.isfinite(scope.get('measured_margin',np.nan)) or scope['measured_margin']<0
+                    or not np.isfinite(scope.get('max_action_delta',np.nan)) or scope['max_action_delta']<=0):
+                raise ValueError('Invalid calibration prediction scope')
+
+    def validate_controller(self,profile):
+        expected=self.controller_profile or {'profile':'g1_joint_pd_v1'}
+        if profile!=expected:
+            raise ValueError('Calibration fixed controller mismatch; independently recalibrate after controller transfer')
+
+    def allows_scope(self,states,actions):
+        """Local calibration is invalid outside its declared deployment domain."""
+        if self.prediction_scope is None:
+            return True
+        states,actions=np.asarray(states),np.asarray(actions)
+        if (states.ndim!=2 or states.shape[1]!=4 or not len(states)
+                or actions.ndim!=2 or actions.shape[1]!=2 or not len(actions)
+                or not np.isfinite(states).all() or not np.isfinite(actions).all()):
+            raise ValueError('Scope requires aligned finite joint context and future deltas')
+        scope=self.prediction_scope
+        low,high=np.asarray(scope['command_lower']),np.asarray(scope['command_upper'])
+        margin=scope['measured_margin']
+        commands=states[-1,2:]+np.cumsum(actions,axis=0)
+        return bool(np.all(states[:,2:]>=low-1e-7) and np.all(states[:,2:]<=high+1e-7)
+            and np.all(states[:,:2]>=low-margin-1e-7) and np.all(states[:,:2]<=high+margin+1e-7)
+            and np.all(commands>=low-1e-7) and np.all(commands<=high+1e-7)
+            and np.all(np.abs(actions)<=scope['max_action_delta']+1e-7))
 
     def validate_for(self,version,semantics):
         if version!=self.model_version or semantics!=self.semantics:
@@ -119,7 +156,8 @@ class ObjectHorizonCalibration:
 
 
 def fit_horizon_calibration(rows, *, model_version, dataset_id, alpha, state_scale,
-                            std_floor, semantics, excluded_episode_ids=()):
+                            std_floor, semantics, excluded_episode_ids=(),controller_profile=None,
+                            prediction_scope=None):
     if not np.isfinite(alpha) or not 0<alpha<1:
         raise ValueError('Invalid miscoverage level')
     maxima={}
@@ -143,11 +181,12 @@ def fit_horizon_calibration(rows, *, model_version, dataset_id, alpha, state_sca
     # Nondecreasing envelope: reliable prefixes cannot become reliable again after a failed step.
     quantiles=np.maximum.accumulate(quantiles)
     return HorizonCalibration(model_version,dataset_id,alpha,tuple(quantiles.tolist()),
-                              tuple(state_scale),std_floor,tuple(sorted(maxima)),semantics)
+                              tuple(state_scale),std_floor,tuple(sorted(maxima)),semantics,
+                              controller_profile=controller_profile,prediction_scope=prediction_scope)
 
 
 def calibrate_visual(manifest, checkpoint, output, *, horizon=4, alpha=.1, std_floor=.05,
-                     device='cpu', window_stride=1):
+                     device='cpu', window_stride=1, allow_controller_transfer=False):
     from wmal.datasets.visual_sequences import VisualDataset, read_episode_lineage, assert_unexposed_episodes
     from wmal.models.visual_latent import VisualWorldModel
     model=VisualWorldModel.load(checkpoint,device=device)
@@ -156,6 +195,12 @@ def calibrate_visual(manifest, checkpoint, output, *, horizon=4, alpha=.1, std_f
     dataset=VisualDataset(manifest,'calibration',horizon=horizon,context_steps=model.config.context_steps)
     if dataset.semantics!=model.semantics:
         raise ValueError('Calibration control semantics mismatch')
+    controller=dataset.manifest.get('source',{}).get('controller_profile',{'profile':'g1_joint_pd_v1'})
+    training_source=model.metadata.get('training_source',{})
+    trained_controller=training_source.get('controller_profile',{'profile':'g1_joint_pd_v1'}) if isinstance(training_source,dict) else {'profile':'g1_joint_pd_v1'}
+    if controller!=trained_controller and not allow_controller_transfer:
+        raise ValueError('Controller transfer requires explicit --allow-controller-transfer and independent calibration')
+    prediction_scope=dataset.manifest.get('source',{}).get('prediction_scope')
     lineage=read_episode_lineage(model.metadata)
     assert_unexposed_episodes(dataset.rows,[lineage['train'],lineage['selection']],context='Calibration')
     if not np.isfinite(std_floor) or std_floor<=0:
@@ -174,7 +219,7 @@ def calibrate_visual(manifest, checkpoint, output, *, horizon=4, alpha=.1, std_f
     excluded += [r['episode_id'] for r in dataset.manifest['episodes'] if r['split']=='test']
     calibration=fit_horizon_calibration(rows,model_version=model.version,dataset_id=sha256_file(manifest),
                  alpha=alpha,state_scale=scale.tolist(),std_floor=std_floor,semantics=model.semantics,
-                 excluded_episode_ids=excluded)
+                 excluded_episode_ids=excluded,controller_profile=controller,prediction_scope=prediction_scope)
     calibration.save(output)
     return calibration
 

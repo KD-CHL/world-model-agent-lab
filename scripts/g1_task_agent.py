@@ -84,6 +84,8 @@ def disturbance_summary(session, report, configured):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint',required=True)
+    parser.add_argument('--model-family',choices=('visual','embodied'),default='visual')
+    parser.add_argument('--inference-url',help='Optional inference-only URL for embodied family')
     parser.add_argument('--calibration')
     parser.add_argument('--config',required=True)
     parser.add_argument('--output',required=True)
@@ -92,6 +94,8 @@ def main(argv=None):
     parser.add_argument('--horizon',type=int)
     parser.add_argument('--seed',type=int)
     parser.add_argument('--device',choices=('cpu','cuda'),default='cpu')
+    parser.add_argument('--controller',choices=('legacy','gravity_compensated'),default='legacy',
+                        help='Fixed low-level profile; A3 requires calibration bound to this controller')
     parser.add_argument('--viewer',action='store_true')
     parser.add_argument('--monitor',action='store_true')
     parser.add_argument('--monitor-port',type=int,default=8766)
@@ -99,6 +103,7 @@ def main(argv=None):
     parser.add_argument('--realtime',action='store_true')
     parser.add_argument('--disturbance',choices=('none','shoulder-pulse'),default='none')
     args=parser.parse_args(argv)
+    owned_provider=None
     try:
         graph,config,scene=load_config(args.config,{k:getattr(args,k) for k in ('baseline','recovery','horizon','seed')})
         if config.baseline=='A3' and not args.calibration:
@@ -108,8 +113,16 @@ def main(argv=None):
         from wmal.models.horizon_calibration import HorizonCalibration
         from wmal.envs.visual_workcell import VisualWorkcellSession
         torch.set_num_threads(1)
-        model=VisualWorldModel.load(args.checkpoint,device=args.device)
-        calibration=HorizonCalibration.load(args.calibration) if args.calibration else None
+        if args.model_family=='embodied':
+            from wmal.agents.embodied_provider import load_embodied_agent_provider
+            model,calibration=load_embodied_agent_provider(args.checkpoint,args.calibration,
+                device=args.device,remote_url=args.inference_url)
+            owned_provider=model
+        else:
+            if args.inference_url:
+                raise ValueError('Remote inference requires explicit embodied model family')
+            model=VisualWorldModel.load(args.checkpoint,device=args.device)
+            calibration=HorizonCalibration.load(args.calibration) if args.calibration else None
         if model.metadata.get('training_source',{}).get('task')!=scene:
             raise ValueError('Checkpoint scene scope differs; transfer requires separate validation')
         if config.horizon>model.metadata['max_horizon']:
@@ -127,13 +140,17 @@ def main(argv=None):
         implementations={name:sha256_file(root/name) for name in (
             'src/wmal/agents/task_runtime.py','src/wmal/agents/task_execution.py',
             'src/wmal/agents/selection_policy.py','src/wmal/skills/research_contracts.py',
-            'src/wmal/skills/task_verifier.py','src/wmal/envs/visual_workcell.py')}
-        atomic_json(output/'run_manifest.json',build_manifest('g1_task_agent',config.seed,inputs,
-             parameters={**asdict(config),'scene':scene,'disturbance':args.disturbance},
-             graph=graph.to_dict(),graph_hash=graph.digest,implementation_hashes=implementations,
-             semantics=model.semantics,model_version=model.version,
-             controller='fixed G1 joint target-delta servo; not learned here'))
+            'src/wmal/skills/task_verifier.py','src/wmal/envs/visual_workcell.py',
+            'src/wmal/models/horizon_calibration.py','src/wmal/models/visual_latent.py',
+            'src/wmal/models/categorical_rssm.py','scripts/g1_task_agent.py')}
+        if args.model_family=='embodied':
+            implementations.update({name:sha256_file(root/name) for name in (
+                'src/wmal/agents/embodied_provider.py','src/wmal/agents/prediction_contracts.py',
+                'src/wmal/models/embodied_world.py','src/wmal/models/embodied_calibration.py',
+                'src/wmal/models/embodied_service.py')})
         with ExitStack() as stack:
+            if args.model_family=='embodied':
+                stack.callback(model.close)
             monitor=None
             if args.monitor:
                 from wmal.monitor.runtime import MonitorRuntime
@@ -142,7 +159,23 @@ def main(argv=None):
                 print(f'Agent monitor: {monitor.url}',flush=True)
             physical=stack.enter_context(VisualWorkcellSession(scene,image_size=model.config.image_size,
                  camera=model.semantics['camera'],period_s=model.semantics['period_s'],seed=config.seed,
-                 frame_publisher=monitor.publisher if monitor else None,realtime=args.realtime))
+                 frame_publisher=monitor.publisher if monitor else None,realtime=args.realtime,
+                 controller=args.controller))
+            if config.baseline=='A3':
+                calibration.validate_controller(physical.controller_profile)
+            atomic_json(output/'run_manifest.json',build_manifest('g1_task_agent',config.seed,inputs,
+                 parameters={**asdict(config),'scene':scene,'disturbance':args.disturbance,
+                             'controller':args.controller,
+                             **({'model_family':'embodied','prediction_samples':model.samples,
+                                 'prediction_mode':'sample','inference_backend':
+                                 'remote' if args.inference_url else 'local'} if args.model_family=='embodied' else {})},
+                 graph=graph.to_dict(),graph_hash=graph.digest,implementation_hashes=implementations,
+                 semantics=model.semantics,model_version=model.version,
+                 controller_profile=physical.controller_profile,
+                 checkpoint_training_controller=model.metadata.get('training_source',{}).get(
+                     'controller_profile',{'profile':'g1_joint_pd_v1'}),
+                 controller_transfer=physical.controller_profile!=model.metadata.get('training_source',{}).get(
+                     'controller_profile',{'profile':'g1_joint_pd_v1'})))
             physical.reset(graph.start)
             session=ShoulderPulse(physical) if args.disturbance=='shoulder-pulse' else physical
             viewer=physical.open_viewer() if args.viewer else None
@@ -181,6 +214,8 @@ def main(argv=None):
                             elif line.strip()=='quit':
                                 break
                             elif line.strip()=='run':
+                                if args.model_family=='embodied':
+                                    model.reset()
                                 session.reset(graph.start)
                                 task_index+=1
                                 repeat=True
@@ -195,6 +230,9 @@ def main(argv=None):
         parser.error(str(exc))
     except KeyboardInterrupt:
         return 130
+    finally:
+        if owned_provider is not None:
+            owned_provider.close()
 
 
 if __name__=='__main__':

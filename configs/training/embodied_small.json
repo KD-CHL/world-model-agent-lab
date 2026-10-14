@@ -1,0 +1,28 @@
+{
+  "physical_dim": 2,
+  "command_dim": 2,
+  "action_dim": 2,
+  "views": 1,
+  "image_size": 128,
+  "event_dim": 0,
+  "context_steps": 8,
+  "horizon": 8,
+  "deter": 1024,
+  "hidden": 1536,
+  "stoch": 16,
+  "classes": 32,
+  "blocks": 8,
+  "encoder_channels": [
+    64,
+    128,
+    256,
+    512
+  ],
+  "fusion_width": 512,
+  "decoder_width": 256,
+  "unimix": 0.01,
+  "norm": "layer",
+  "norm_eps": 0.00001,
+  "rgb_mode": "residual",
+  "preset": "small"
+}

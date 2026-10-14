@@ -8,6 +8,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import time
+from uuid import uuid4
 import numpy as np
 from wmal.agents.task_graph import positive_int
 from wmal.agents.task_state import TaskState
@@ -61,10 +62,16 @@ class TaskRuntime:
             raise ValueError('This runtime requires two actions/four task-state values')
         if config.horizon>predictor.metadata.get('max_horizon',0):
             raise ValueError('Requested horizon exceeds trained horizon')
+        self.controller_profile=deepcopy(getattr(session,'controller_profile',{'profile':'g1_joint_pd_v1'}))
         if config.baseline=='A3':
             if calibration is None:
                 raise ValueError('A3 requires independent frozen calibration')
             calibration.validate_for(predictor.version,predictor.semantics)
+            validate_controller=getattr(calibration,'validate_controller',None)
+            if callable(validate_controller):
+                validate_controller(deepcopy(self.controller_profile))
+            elif self.controller_profile.get('profile')!='g1_joint_pd_v1':
+                raise ValueError('Nonlegacy controller requires controller-bound calibration')
         self.graph,self.session,self.predictor,self.calibration=graph,session,predictor,calibration
         self.config,self.emit_sink=config,emit
         self.artifact_dir=Path(artifact_dir) if artifact_dir is not None else None
@@ -85,6 +92,8 @@ class TaskRuntime:
         self._cancel=None
         self._residuals=[]
         self._frozen={}
+        self._prediction_run_id=str(self.artifact_dir.resolve()) if self.artifact_dir else str(uuid4())
+        self._observation_times={}
         previous=np.asarray(graph.start)
         # A0's complete nominal program is frozen before any execution.
         ordered=[]
@@ -133,10 +142,18 @@ class TaskRuntime:
     def _versions_valid(self):
         if self.predictor.version!=self.model_version or self.predictor.semantics!=self.semantics:
             return False
+        if getattr(self.session,'controller_profile',{'profile':'g1_joint_pd_v1'})!=self.controller_profile:
+            return False
         if self.calibration is not None:
             current=sha256(json.dumps(vars(self.calibration),sort_keys=True,default=str).encode()).hexdigest()
             if current!=self.calibration_hash:
                 return False
+            validate_controller=getattr(self.calibration,'validate_controller',None)
+            if callable(validate_controller):
+                try:
+                    validate_controller(deepcopy(self.controller_profile))
+                except (ValueError,RuntimeError,KeyError,TypeError):
+                    return False
         return self.session.semantics==self.semantics
 
     def _recover(self,node,reason):
@@ -184,6 +201,7 @@ class TaskRuntime:
         try:
             self._observed=self.session.observe()
             self.history.observe_current(self._observed)
+            self._observation_times[self._observed.step_id]=float(self.session.data.time)
         except (Exception,KeyboardInterrupt) as exc:
             self.session.abort('initial_observation_failed')
             self.state.belief['context_valid']=False
@@ -212,6 +230,7 @@ class TaskRuntime:
         self._emit('agent_state',{'state':self.state.snapshot()})
         report={'schema':'wmal.task_result.v1','baseline':self.config.baseline,'recovery':self.config.recovery,
                 'seed':self.config.seed,'model_version':self.model_version,'graph_hash':self.graph.digest,
+                'controller_profile':deepcopy(self.controller_profile),
                 'elapsed_s':time.monotonic()-started,'state':self.state.snapshot(),
                 'execution_ledger':deepcopy(self._ledger),'prediction_residuals':deepcopy(self._residuals)}
         self._emit('task_result',report)
@@ -226,6 +245,7 @@ class TaskRuntime:
         mode='hold' if node.skill=='joint_hold' else 'reach'
         repairing=False
         progress=[]
+        settling_cycles=0
         frozen_offset=0
         consecutive_rejections=0
         self._emit('node_state',{'node':deepcopy(entry),'target':list(node.target),'skill':node.skill})
@@ -240,7 +260,7 @@ class TaskRuntime:
             if not self._versions_valid():
                 self._terminate('needs_review','model_or_semantics_changed')
                 return
-            matched=verifier.matches(self._observed)[0]
+            matched,_,command_error=verifier.matches(self._observed)
             if mode=='hold' and (not matched or not JointSkills.ready(self._observed,replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps)))):
                 verifier.count=0
                 entry['hold_count']=0
@@ -261,7 +281,14 @@ class TaskRuntime:
                     self._complete(node,entry)
                     return
             horizon=min(self.config.horizon,state.budget_remaining['actions'],state.budget_remaining['node_actions'])
-            if mode=='hold':
+            settling=(mode=='reach' and command_error<=.015 and self.config.baseline!='A0')
+            if settling:
+                # Keep the in-tolerance command stable. Give at most four real
+                # zero-action cycles before applying progress-based stall
+                # detection; sensor reads and rejected plans consume no grace.
+                horizon=min(horizon,max(1,4-settling_cycles))
+                active=replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps))
+            elif mode=='hold':
                 horizon=min(horizon,max(1,node.hold_steps-verifier.count))
                 active=replace(node,skill='joint_hold',hold_steps=max(1,node.hold_steps))
             else:
@@ -274,20 +301,39 @@ class TaskRuntime:
                 actions=frozen[frozen_offset:frozen_offset+horizon]
                 candidates=[SkillCandidate(active.skill,actions)]
             else:
-                candidates=JointSkills.candidates(self._observed,active,horizon,self.rng)
+                candidates=JointSkills.candidates(self._observed,active,horizon,self.rng,goal_arrival=True)
             state.decision_count+=1
             state.replans+=1
             planned_at=time.monotonic()
             try:
+                if self.config.baseline in ('A2','A3') and hasattr(self.predictor,'prepare_decision'):
+                    from wmal.agents.embodied_provider import DecisionContext
+                    if abs(float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                        raise ValueError('Simulation time changed without a real context update')
+                    inputs=self.history.inputs() if self.context_steps else (
+                        self._observed.rgb[None],self._observed.state[None],np.empty((0,2)))
+                    ids=self.history.describe()['history_step_ids'] if self.context_steps else [self._observed.step_id]
+                    self.predictor.prepare_decision(DecisionContext(run_id=self._prediction_run_id,
+                        task_id=self.graph.task_id,node_id=node.node_id,episode_id=self._observed.episode_id,
+                        context_step_ids=tuple(ids),observation_times=tuple(self._observation_times[i] for i in ids),
+                        controller=deepcopy(self.controller_profile),deadline=planned_at+self.config.planning_timeout_s,
+                        rgb=inputs[0],state=inputs[1],past_actions=inputs[2]))
                 ranked,evidence=select_candidates(self.predictor,self._observed,candidates,np.tile(node.target,2),
                     baseline=self.config.baseline,calibration=self.calibration,error_budget=self.config.error_budget,
                     scale=self.scale,remaining=horizon,state_lower=np.concatenate([TARGET_LOW-.15,TARGET_LOW]),
                     state_upper=np.concatenate([TARGET_HIGH+.15,TARGET_HIGH]),
-                    history=self.history if self.context_steps else None)
+                    history=self.history if self.context_steps else None,joint_target=np.asarray(node.target))
                 if not self._versions_valid():
                     raise ValueError('Model/semantics changed during prediction')
-            except (ValueError,RuntimeError,KeyError,TypeError) as exc:
-                self._terminate('needs_review',f'prediction_invalid: {exc}')
+                if hasattr(self.predictor,'prepare_decision') and abs(
+                        float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                    raise ValueError('Simulation time changed during prediction')
+            except (ValueError,RuntimeError,KeyError,TypeError,OSError) as exc:
+                faulted=isinstance(exc,OSError) or getattr(getattr(self.predictor,'transport',None),'faulted',False)
+                if faulted:
+                    self.session.abort('prediction_transport_failed')
+                    state.belief['context_valid']=False
+                self._terminate('fault_latched' if faulted else 'needs_review',f'prediction_invalid: {exc}')
                 return
             if time.monotonic()-planned_at>self.config.planning_timeout_s:
                 self._terminate('needs_review','planning_deadline')
@@ -307,8 +353,15 @@ class TaskRuntime:
             before=self._observed
             binding={'task':self.graph.task_id,'node':node.node_id,'graph':self.graph.digest,
                      'skill':candidate.skill,'model':self.model_version,'calibration':self.calibration_hash}
+            prediction_binding=(diagnostics or {}).get('prediction_binding',{})
+            prediction_deadline=planned_at+self.config.planning_timeout_s
+            if prediction_binding:
+                prediction_deadline=min(prediction_deadline,prediction_binding.get('deadline',prediction_deadline))
+                binding['prediction_request_id']=prediction_binding['request_id']
+                binding['prediction_decision_id']=prediction_binding['decision_id']
+                binding['prediction_deadline']=prediction_deadline
             try:
-                grant=self.manager.authorize(before,actions,binding,time.monotonic()+self.config.planning_timeout_s)
+                grant=self.manager.authorize(before,actions,binding,prediction_deadline)
             except ObservationReceptionError as exc:
                 state.belief['context_valid']=False
                 self._terminate('fault_latched',f'authorization_observation_failed: {exc}')
@@ -316,7 +369,10 @@ class TaskRuntime:
             except ValueError as exc:
                 self._terminate('needs_review',f'authorization_rejected: {exc}')
                 return
-            self._emit('plan',{'decision_id':grant.decision_id,'skill':candidate.skill,'actions':actions.tolist(),
+            self._emit('plan',{'decision_id':grant.decision_id,
+                 **({'prediction_request_id':prediction_binding['request_id'],
+                     'prediction_decision_id':prediction_binding['decision_id']} if prediction_binding else {}),
+                 'skill':candidate.skill,'actions':actions.tolist(),
                  'prefix_length':prefix,'model_version':self.model_version,'status':'execute',
                  'predicted_states':None if mean is None else mean.tolist(),
                  'error_bounds':None if bounds is None else bounds.tolist(),
@@ -328,6 +384,9 @@ class TaskRuntime:
             def on_step(observed,offset):
                 nonlocal mode
                 self._observed=observed
+                self._observation_times[observed.step_id]=float(self.session.data.time)
+                self._observation_times={key:value for key,value in self._observation_times.items()
+                    if key>=observed.step_id-max(1,self.context_steps)}
                 verified=verifier.update(observed,executed=True)
                 if mode=='reach' and node.hold_steps:
                     verifier.count=0  # reaching sample is not a zero-action hold
@@ -345,8 +404,13 @@ class TaskRuntime:
                 if mode=='reach' and verifier.last['matched'] and (node.hold_steps or repairing):
                     return 'reach_verified'
                 return None
+            def validate_dispatch():
+                if hasattr(self.predictor,'prepare_decision') and abs(
+                        float(self.session.data.time)-self._observation_times[self._observed.step_id])>1e-9:
+                    raise ValueError('Simulation time changed before dispatch')
+                return self._versions_valid()
             result=self.manager.execute(grant,stop=self._cancel,on_step=on_step,
-                                        validate_binding=self._versions_valid)
+                                        validate_binding=validate_dispatch)
             count=result['executed']
             state.executed_cycles+=count
             entry['actions']+=count
@@ -442,11 +506,20 @@ class TaskRuntime:
                 self._complete(node,entry)
                 return
             if mode=='reach' and trace:
-                progress.extend(float(np.linalg.norm(v.state[:2]-node.target)) for v in trace)
-                if len(progress)>=4 and progress[-4]-progress[-1]<.005:
+                for offset,observed in enumerate(trace):
+                    _,measured_error,command_error=verifier.matches(observed)
+                    stable_command=(command_error<=.015 and np.all(np.abs(actions[offset])<=1e-12))
+                    settling_cycles=min(4,settling_cycles+1) if stable_command else 0
+                    progress.append((measured_error,command_error))
+                    progress=progress[-4:]
+                no_progress=(len(progress)==4 and all(
+                    progress[0][axis]-progress[-1][axis]<.005 for axis in (0,1)))
+                settling_ready=(command_error>.015 or settling_cycles>=4 or self.config.baseline=='A0')
+                if no_progress and settling_ready:
                     if not self._recover(node,'stalled'):
                         return
                     progress=[]
+                    settling_cycles=0
                     # Same finite candidate set, next seeded proposals; no action replay.
                     state.status='running'
                     entry['status']='running'

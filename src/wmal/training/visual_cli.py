@@ -17,6 +17,9 @@ def main(argv=None):
     collect.add_argument('--steps',type=int,default=16)
     collect.add_argument('--image-size',type=int,default=64)
     collect.add_argument('--seed',type=int,default=0)
+    collect.add_argument('--controller',choices=('legacy','gravity_compensated'),default='legacy')
+    collect.add_argument('--target-low',type=float,nargs=2,help='Declared local shoulder/elbow command lower bounds')
+    collect.add_argument('--target-high',type=float,nargs=2,help='Declared local shoulder/elbow command upper bounds')
     importer=sub.add_parser('import-lerobot')
     importer.add_argument('--source-manifest',required=True)
     importer.add_argument('--output',required=True)
@@ -40,6 +43,9 @@ def main(argv=None):
         command.add_argument('--output',required=True)
         command.add_argument('--horizon',type=int,default=4)
         command.add_argument('--device',default='cpu')
+        if name in ('calibrate','evaluate'):
+            command.add_argument('--allow-controller-transfer',action='store_true',
+                                 help='Explicit frozen-weight evaluation or calibration on a different fixed controller')
         if name in ('calibrate','calibrate-object'):
             command.add_argument('--alpha',type=float,default=.2)
             command.add_argument('--std-floor',type=float,default=.05)
@@ -103,7 +109,8 @@ def main(argv=None):
     if args.command=='collect':
         from wmal.training.visual_collector import collect_visual_workcell
         result={'manifest':str(collect_visual_workcell(args.output,task=args.task,episodes=args.episodes,
-                    steps=args.steps,image_size=args.image_size,seed=args.seed))}
+                    steps=args.steps,image_size=args.image_size,seed=args.seed,controller=args.controller,
+                    target_low=args.target_low,target_high=args.target_high))}
     elif args.command=='import-lerobot':
         from wmal.datasets.visual_lerobot import convert_lerobot_v21
         result={'manifest':str(convert_lerobot_v21(args.source_manifest,args.output,
@@ -152,7 +159,8 @@ def main(argv=None):
         from wmal.models.horizon_calibration import calibrate_visual
         result=asdict(calibrate_visual(args.manifest,args.checkpoint,args.output,horizon=args.horizon,
                   alpha=args.alpha,std_floor=args.std_floor,device=args.device,
-                  window_stride=args.window_stride))
+                  window_stride=args.window_stride,
+                  allow_controller_transfer=args.allow_controller_transfer))
     elif args.command=='calibrate-object':
         from wmal.models.horizon_calibration import calibrate_object_visual
         result=asdict(calibrate_object_visual(args.manifest,args.checkpoint,args.output,horizon=args.horizon,
@@ -163,7 +171,8 @@ def main(argv=None):
         result=evaluate_visual(args.manifest,args.checkpoint,horizon=args.horizon,
                                device=args.device,calibration=args.calibration,
                                object_calibration=args.object_calibration,
-                               window_stride=args.window_stride,split=args.split)
+                               window_stride=args.window_stride,split=args.split,
+                               allow_controller_transfer=args.allow_controller_transfer)
         atomic_json(args.output,result)
     print(json.dumps(result,ensure_ascii=False,indent=2,allow_nan=False))
 
